@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// The three participating model providers. Deliberately not "personas" --
+// agents are labeled by what they actually are, never given invented
+// human names or backstories (see HurumoAI precedent in project docs).
+enum Provider {
+  ANTHROPIC
+  OPENAI
+  GOOGLE
+}
+
+// Phases the run moves through in order. Ideation and role assignment use
+// the same round-robin + consensus/vote mechanism; operation is whatever
+// running the chosen business turns out to mean, decided by the agents.
+enum Phase {
+  IDEATION
+  ROLE_ASSIGNMENT
+  OPERATION
+}
+
+enum RunStatus {
+  DRAFT // created but not started -- keys/budgets not yet confirmed
+  ACTIVE
+  PAUSED // manually paused by admin
+  STOPPED_BUDGET // auto-stopped: an agent (or the run) hit its budget cap
+  STOPPED_MANUAL
+  COMPLETED
+}
+
+enum DecisionMethod {
+  CONSENSUS // all active agents signaled ready_to_decide with no forced vote
+  MAJORITY_VOTE // round cap was hit; resolved by explicit vote
+}
+
+// Encrypted API keys + default model/budget config, set once via the
+// admin settings page. One row per provider. Keys are AES-256-GCM
+// encrypted with a server-side key (ENCRYPTION_KEY env var) -- never
+// stored or transmitted in plaintext, never sent to the client.
+//
+// Pricing is admin-entered rather than hardcoded in application code:
+// provider rate cards change often and this app has no reliable way to
+// fetch them live, so cost tracking would silently drift out of date if
+// baked into a constants file. The settings page should link out to each
+// provider's current pricing page and ask the admin to confirm the rate
+// before a run starts.
+model ProviderConfig {
+  id                    String   @id @default(cuid())
+  provider              Provider @unique
+  encryptedApiKey       String
+  iv                    String
+  authTag               String
+  defaultModelId        String
+  inputPricePerMillion  Decimal  @db.Decimal(10, 4)
+  outputPricePerMillion Decimal  @db.Decimal(10, 4)
+  updatedAt             DateTime @updatedAt
+}
+
+model Run {
+  id     String    @id @default(cuid())
+  name   String?
+  status RunStatus @default(DRAFT)
+
+  currentPhase Phase @default(IDEATION)
+
+  // Round-robin turn order is derived, not stored: the Nth turn in a phase
+  // goes to activeAgents[N mod activeAgents.length] (see lib/agents/engine.ts).
+  // A yield substitutes a named agent into that slot for one tick instead
+  // of adding an extra turn, so every active agent still gets exactly one
+  // turn per lap regardless of how many yields happened along the way.
+  // pendingYieldToAgentId is the only rotation state that actually needs
+  // to persist between ticks; roundNumber is a cached display value,
+  // recomputed from the turn count on every tick, not authoritative.
+  pendingYieldToAgentId String?
+  roundNumber           Int     @default(0)
+  roundCapPerPhase      Int     @default(10)
+  forcedVotePending     Boolean @default(false)
+
+  // Soft ceiling on total run spend, independent of each agent's own cap --
+  // belt and suspenders in case per-agent tracking drifts. Compared against
+  // sum(agent.spendUsd) + systemSpendUsd.
+  totalBudgetCapUsd Decimal @default(90) @db.Decimal(10, 2)
+  // Infra cost not attributed to any one agent -- e.g. the small extraction
+  // call used to summarize a consensus or tally a forced vote into a clean
+  // Decision record. Deliberately not counted against any agent's own
+  // budget cap since it's plumbing, not a participant's contribution.
+  systemSpendUsd    Decimal @default(0) @db.Decimal(10, 6)
+
+  createdAt DateTime  @default(now())
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  agents    Agent[]
+  turns     Turn[]
+  decisions Decision[]
+  artifacts Artifact[]
+}
+
+model Agent {
+  id    String @id @default(cuid())
+  runId String
+  run   Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  provider    Provider
+  displayName String // "Claude" / "GPT" / "Gemini" -- real identity, not a persona
+  modelId     String
+  seatIndex   Int // fixed rotation order, 0..2
+
+  budgetCapUsd Decimal @default(30) @db.Decimal(10, 2)
+  spendUsd     Decimal @default(0) @db.Decimal(10, 6)
+
+  // A role only exists once ROLE_ASSIGNMENT resolves (e.g. "CEO", "Head of
+  // Product") -- left null until then.
+  assignedRole String?
+
+  // False once this agent's budget cap is hit or it errors out repeatedly;
+  // skipped in rotation but its turns remain in the transcript.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  turnsAsSpeaker Turn[]     @relation("TurnAgent")
+  turnsYieldedTo Turn[]     @relation("TurnYieldTarget")
+  artifacts      Artifact[]
+
+  @@unique([runId, seatIndex])
+  @@unique([runId, provider])
+}
+
+// One turn = one agent's contribution during its speaking slot. The
+// weaknessCritique field is mandatory by design, not optional -- it's the
+// structural counter to multi-agent sycophancy/convergence: an agent has
+// to name a real weakness in the current proposal before it's allowed to
+// signal agreement via readyToDecide.
+model Turn {
+  id      String @id @default(cuid())
+  runId   String
+  run     Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agentId String
+  agent   Agent  @relation("TurnAgent", fields: [agentId], references: [id])
+
+  phase          Phase
+  roundNumber    Int
+  sequenceNumber Int // global monotonic order within the run
+
+  message          String
+  weaknessCritique String
+
+  readyToDecide  Boolean @default(false)
+  yieldToAgentId String?
+  yieldToAgent   Agent?  @relation("TurnYieldTarget", fields: [yieldToAgentId], references: [id])
+
+  isVote     Boolean @default(false)
+  voteChoice String?
+
+  // Web search (or other read-only research tool) calls made during this
+  // turn, logged for transparency -- query + result summary, not raw HTML.
+  toolCalls Json?
+
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Decimal @db.Decimal(10, 6)
+
+  createdAt DateTime @default(now())
+
+  @@unique([runId, sequenceNumber])
+}
+
+model Decision {
+  id        String         @id @default(cuid())
+  runId     String
+  run       Run            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  phase     Phase
+  outcome   String // e.g. the chosen business, or the full role assignment
+  method    DecisionMethod
+  dissent   Json? // { agentId: string, reason: string }[] when not unanimous
+  decidedAt DateTime       @default(now())
+}
+
+// Generic collateral produced along the way -- deliberately untyped beyond
+// a free-form "type" string, since what the agents choose to build is not
+// known in advance (landing page copy, a business plan doc, marketing
+// drafts, anything else). Never anything that gets sent anywhere real.
+model Artifact {
+  id               String  @id @default(cuid())
+  runId            String
+  run              Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  phase            Phase
+  type             String
+  title            String
+  content          String
+  createdByAgentId String?
+  createdByAgent   Agent?  @relation(fields: [createdByAgentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
