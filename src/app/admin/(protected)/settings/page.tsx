@@ -1,29 +1,8 @@
 import { prisma } from "@/lib/db";
-import type { Provider } from "@prisma/client";
+import { PROVIDER_REGISTRY } from "@/lib/agents/providerRegistry";
 import { saveProviderConfigAction } from "../../actions";
 
 export const dynamic = "force-dynamic";
-
-const PROVIDERS: { id: Provider; label: string; pricingUrl: string; modelHint: string }[] = [
-  {
-    id: "ANTHROPIC",
-    label: "Claude (Anthropic)",
-    pricingUrl: "https://platform.claude.com/docs/en/about-claude/pricing",
-    modelHint: "e.g. claude-haiku-4-5",
-  },
-  {
-    id: "OPENAI",
-    label: "GPT (OpenAI)",
-    pricingUrl: "https://platform.openai.com/docs/pricing",
-    modelHint: "e.g. gpt-4o-mini -- confirm the current cheapest model in the OpenAI console",
-  },
-  {
-    id: "GOOGLE",
-    label: "Gemini (Google)",
-    pricingUrl: "https://ai.google.dev/gemini-api/docs/pricing",
-    modelHint: "e.g. gemini-2.5-flash -- confirm the current cheapest model in AI Studio",
-  },
-];
 
 export default async function SettingsPage() {
   const configs = await prisma.providerConfig.findMany();
@@ -35,11 +14,13 @@ export default async function SettingsPage() {
         <h1 className="text-xl font-semibold">Provider settings</h1>
         <p className="mt-1 text-sm text-neutral-400">
           Pricing is entered here rather than assumed by the app -- rate cards change often, so
-          check each provider&apos;s current pricing page (linked below) before saving.
+          check each provider&apos;s current pricing page (linked below) before saving. Configure
+          any subset here -- which ones actually join a run is chosen when you create it.
         </p>
       </div>
 
-      {PROVIDERS.map(({ id, label, pricingUrl, modelHint }) => {
+      {PROVIDER_REGISTRY.map(({ id, displayName, pricingUrl, modelHint }) => {
+        const label = displayName;
         const config = byProvider.get(id);
         return (
           <form

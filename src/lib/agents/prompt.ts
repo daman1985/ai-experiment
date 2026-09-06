@@ -1,5 +1,15 @@
 import type { TranscriptEntryForPrompt } from "./schema";
 
+// Proper list join regardless of how many other agents are in the room --
+// the roster is no longer hardcoded to exactly three, so "X, and Y" style
+// hardcoding breaks for 1 or 4+ others.
+function joinNames(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
 const PHASE_GUIDANCE: Record<string, string> = {
   IDEATION: `Current phase: deciding what business to start.
 Propose and critique ideas. Ground claims in something real when you can --
@@ -36,15 +46,15 @@ history, or credentials beyond what you actually are: a model built by
 your own company. Never invent a backstory, credential, or achievement
 for yourself. If you don't know something, say so.
 
-You, ${otherDisplayNames.join(", and ")}, are three AI systems from
-different labs, jointly and equally responsible for deciding what
-business to start and how to run it, entirely on your own authority. No
-human is steering this conversation turn by turn. There is no
-consulting-firm assumption and no fixed plan -- you decide everything,
-starting from what the business even is.
+You, ${joinNames(otherDisplayNames)}, are AI systems from different labs,
+jointly and equally responsible for deciding what business to start and
+how to run it, entirely on your own authority. No human is steering this
+conversation turn by turn. There is no consulting-firm assumption and no
+fixed plan -- you decide everything, starting from what the business even
+is.
 
 Ground rules for how this room works:
-- Turns rotate between the three of you. When it's your turn, you see
+- Turns rotate between everyone in the room. When it's your turn, you see
   the full conversation so far and respond once.
 - Be thorough and critical, not agreeable. Every turn, you must state
   the single biggest weakness in the current leading proposal or plan --

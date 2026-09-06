@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { verifyPassword, createSession, destroySession } from "@/lib/adminAuth";
+import { registryEntry } from "@/lib/agents/providerRegistry";
 import type { Provider } from "@prisma/client";
 
 export async function loginAction(formData: FormData) {
@@ -71,27 +72,26 @@ export async function saveProviderConfigAction(formData: FormData) {
   revalidatePath("/admin/settings");
 }
 
-const DISPLAY_NAMES: Record<Provider, string> = {
-  ANTHROPIC: "Claude",
-  OPENAI: "GPT",
-  GOOGLE: "Gemini",
-};
-
 export async function createRunAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim() || null;
   const perAgentBudget = Number(formData.get("perAgentBudget"));
   const totalBudget = Number(formData.get("totalBudget"));
   const roundCapPerPhase = Number(formData.get("roundCapPerPhase"));
+  const selectedProviders = formData.getAll("providers") as Provider[];
 
   if (![perAgentBudget, totalBudget, roundCapPerPhase].every(Number.isFinite)) {
     throw new Error("Budget and round cap fields must be numbers.");
   }
+  if (selectedProviders.length < 2) {
+    throw new Error(
+      "Pick at least 2 providers -- the room mechanic (rotation, votes) needs more than one perspective.",
+    );
+  }
 
   const configs = await prisma.providerConfig.findMany();
-  const requiredProviders: Provider[] = ["ANTHROPIC", "OPENAI", "GOOGLE"];
-  for (const p of requiredProviders) {
+  for (const p of selectedProviders) {
     if (!configs.some((c) => c.provider === p)) {
-      throw new Error(`Configure an API key for ${DISPLAY_NAMES[p]} (${p}) before creating a run.`);
+      throw new Error(`${registryEntry(p).displayName} (${p}) isn't configured in Settings yet.`);
     }
   }
 
@@ -101,11 +101,11 @@ export async function createRunAction(formData: FormData) {
       totalBudgetCapUsd: totalBudget,
       roundCapPerPhase,
       agents: {
-        create: requiredProviders.map((provider, seatIndex) => {
+        create: selectedProviders.map((provider, seatIndex) => {
           const config = configs.find((c) => c.provider === provider)!;
           return {
             provider,
-            displayName: DISPLAY_NAMES[provider],
+            displayName: registryEntry(provider).displayName,
             modelId: config.defaultModelId,
             seatIndex,
             budgetCapUsd: perAgentBudget,

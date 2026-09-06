@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { PROVIDER_REGISTRY } from "@/lib/agents/providerRegistry";
 import { createRunAction, startRunAction, pauseRunAction, stopRunAction } from "../actions";
 
 // This reads live run/agent state and requires an authenticated session --
@@ -19,13 +20,15 @@ export default async function AdminDashboard() {
     orderBy: { createdAt: "desc" },
     include: { agents: true },
   });
+  const configuredProviders = await prisma.providerConfig.findMany();
+  const configuredIds = new Set(configuredProviders.map((c) => c.provider));
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-xl font-semibold">Runs</h1>
         <p className="mt-1 text-sm text-neutral-400">
-          Each run creates three agents (Claude, GPT, Gemini) using the model and pricing
+          Each run creates one agent per provider you select below, using the model and pricing
           configured in Settings. Starting a run makes it eligible for the cron job to advance --
           nothing happens until the cron tick fires.
         </p>
@@ -105,6 +108,32 @@ export default async function AdminDashboard() {
             name="name"
             className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
           />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm text-neutral-400">
+            Participants (pick at least 2)
+          </label>
+          <div className="flex flex-wrap gap-4">
+            {PROVIDER_REGISTRY.map((p) => {
+              const configured = configuredIds.has(p.id);
+              return (
+                <label
+                  key={p.id}
+                  className={`flex items-center gap-2 text-sm ${configured ? "" : "text-neutral-600"}`}
+                >
+                  <input
+                    type="checkbox"
+                    name="providers"
+                    value={p.id}
+                    defaultChecked={configured}
+                    disabled={!configured}
+                  />
+                  {p.displayName}
+                  {!configured && " (not configured)"}
+                </label>
+              );
+            })}
+          </div>
         </div>
         <div className="grid grid-cols-3 gap-3">
           <div>

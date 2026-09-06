@@ -96,9 +96,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/tick
    pricing page is linked from the settings form; confirm the current rate
    there before saving; the current model-ID suggestions are worth double
    checking too, especially for OpenAI and Gemini which move fast.
-3. On the **Runs** page, set a per-agent budget, a total budget cap, and a
-   round cap per phase (how many full rotations before a stuck decision
-   is forced to a vote), then create the run.
+3. On the **Runs** page, pick which configured providers join this run
+   (minimum 2 -- the rotation/vote mechanic needs more than one
+   perspective), set a per-agent budget, a total budget cap, and a round
+   cap per phase (how many full rotations before a stuck decision is
+   forced to a vote), then create the run. The roster isn't hardcoded to
+   exactly three: configuring a fourth provider's adapter later just adds
+   another checkbox here.
 4. Click **Start**. The next cron tick (or a manual curl, see above) takes
    the first turn.
 5. Watch it at `/runs/<id>` -- it auto-refreshes every 20s while the run
