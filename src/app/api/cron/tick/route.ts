@@ -9,24 +9,30 @@ import { logDiagnostic } from "@/lib/diagnostics";
 // https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs.
 // A turn can involve two LLM calls (research + structured output) plus a
 // live web search, so this is given real headroom rather than the
-// platform's 10s default.
-export const maxDuration = 60;
+// platform's 10s default. Confirmed directly against production with the
+// app's actual prompts (not placeholder content) that a real research
+// call can legitimately take ~35s and genuinely original turn reasoning
+// ~24s, not counting a possible consensus-extraction chain immediately
+// afterward (another ~50s worst case) -- 60s was never actually enough
+// for a single real turn, let alone more than one. See
+// MIN_TURN_BUDGET_MS/MIN_EXTRACTION_BUDGET_MS in engine.ts, which this
+// deadline math is kept in sync with.
+export const maxDuration = 150;
 export const dynamic = "force-dynamic";
 
 // Confirmed directly against a real production tick: two active runs
 // processed sequentially in one invocation genuinely can, and did, blow
-// past this route's 60s maxDuration -- the first run's Anthropic call
-// correctly hit its own 35s-worst-case controlled timeout (withTimeout
-// working as designed), but that left only ~25s of the 60s budget for
-// the second run, which then got hard-killed by the platform instead of
-// its own timeout. A per-run *fresh* budget check (the previous
-// TICK_BUDGET_MS approach) doesn't prevent this: what matters is how
-// much of the *one shared* 60s deadline is left, not a local guess.
-// deadlineAt is that one shared deadline, threaded through advanceRun so
-// every step (starting a turn, or attempting a decision's extraction
-// calls) checks against the same absolute cutoff rather than assuming a
-// fresh allotment. 5s of margin below the actual 60s hard kill for
-// response/serialization overhead.
+// past this route's (then 60s) maxDuration -- the first run's Anthropic
+// call correctly hit its own controlled timeout (withTimeout working as
+// designed), but that left too little of the budget for the second run,
+// which then got hard-killed by the platform instead of its own timeout.
+// A per-run *fresh* budget check (the earlier TICK_BUDGET_MS approach)
+// doesn't prevent this: what matters is how much of the *one shared*
+// deadline is left, not a local guess. deadlineAt is that one shared
+// deadline, threaded through advanceRun so every step (starting a turn,
+// or attempting a decision's extraction calls) checks against the same
+// absolute cutoff rather than assuming a fresh allotment. Margin below
+// the actual hard kill for response/serialization overhead.
 const DEADLINE_MARGIN_MS = 5_000;
 
 export async function GET(request: NextRequest) {

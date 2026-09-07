@@ -38,16 +38,25 @@ function toEncryptedPayload(config: ProviderConfig) {
   return { encrypted: config.encryptedApiKey, iv: config.iv, authTag: config.authTag };
 }
 
-// Generous relative to the route's own maxDuration (60s) -- long enough
-// that a genuinely in-flight call is never preempted, short enough that a
-// crashed invocation's lock doesn't stay stuck for the rest of the run.
-const STALE_LOCK_MS = 90_000;
+// A single advanceRunLocked call can now legitimately run a turn
+// (research + turn, up to ~75s, see MIN_TURN_BUDGET_MS below) and then,
+// if that turn happens to complete a consensus, immediately attempt the
+// extraction chain too (up to ~50s, see MIN_EXTRACTION_BUDGET_MS) --
+// worst case, one call's real duration approaches ~125s. This has to
+// stay comfortably above that, or a call that's still legitimately
+// running gets treated as an abandoned/crashed lock and a second caller
+// (the cron tick and "watch live" can race) starts a duplicate LLM call.
+const STALE_LOCK_MS = 150_000;
 
 // Worst case for the LLM turn call path (research timeout + turn timeout,
-// see providers/anthropic.ts et al) plus margin. A caller sharing one
-// hard deadline across multiple runs (the cron tick) needs this to decide
-// whether there's enough of the deadline left to even start a turn.
-export const MIN_TURN_BUDGET_MS = 37_000;
+// see providers/anthropic.ts et al) plus margin. Confirmed directly
+// against production with the app's real prompts (not placeholder
+// content) that a real web-search research call can legitimately take
+// ~35s and genuinely original turn reasoning ~24s -- raised well past
+// both. A caller sharing one hard deadline across multiple runs (the
+// cron tick) needs this to decide whether there's enough of the deadline
+// left to even start a turn.
+export const MIN_TURN_BUDGET_MS = 80_000;
 // Worst case for two sequential extraction calls (outcome + root-cause,
 // or vote tally + root-cause, see decisionExtraction.ts) plus margin.
 // Checked against the *shared* deadline, not a fresh budget, before
@@ -56,7 +65,7 @@ export const MIN_TURN_BUDGET_MS = 37_000;
 // retried on the next one: checkConsensus/handleForcedVoteTurn re-derive
 // "is everyone ready/voted" from stored turns each time, so nothing is
 // lost by deferring, just delayed.
-export const MIN_EXTRACTION_BUDGET_MS = 32_000;
+export const MIN_EXTRACTION_BUDGET_MS = 55_000;
 
 // One call = one turn (or one budget/consensus housekeeping step) for a
 // single run. Designed to be cheap and idempotent-ish to call repeatedly
@@ -71,12 +80,14 @@ export const MIN_EXTRACTION_BUDGET_MS = 32_000;
 // budget -- critical when a caller (the cron tick) processes multiple
 // runs against one shared hard function timeout: each run must know how
 // much of *that same* deadline is left, not assume it gets a full fresh
-// allotment. Defaults to a fresh 55s out for callers with their own
+// allotment. Defaults to a fresh budget for callers with their own
 // separate invocation (e.g. the "watch live" admin action), which don't
-// share a deadline with anything else.
+// share a deadline with anything else -- must exceed MIN_TURN_BUDGET_MS
+// with margin, or this default would defeat itself by leaving no room to
+// actually attempt a turn.
 export async function advanceRun(
   runId: string,
-  deadlineAt: number = Date.now() + 55_000,
+  deadlineAt: number = Date.now() + 90_000,
 ): Promise<AdvanceResult> {
   const claimed = await prisma.run.updateMany({
     where: {

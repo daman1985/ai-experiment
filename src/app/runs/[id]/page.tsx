@@ -21,6 +21,13 @@ import {
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+// "Watch live" (LiveWatchToggle) calls advanceRunNowAction directly, a
+// server action on this page -- without this export it ran under
+// whatever the platform's default function duration is, nowhere close to
+// enough for a real research+turn call (confirmed up to ~75s combined).
+// Matches advanceRun()'s own default deadline (90s) with a little more
+// room for surrounding overhead.
+export const maxDuration = 100;
 
 export default async function RunViewerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

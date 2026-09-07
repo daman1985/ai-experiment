@@ -14,13 +14,18 @@ import { withTimeout } from "./withTimeout";
 const EXTRACTION_MODEL_ID = "claude-haiku-4-5";
 
 // Same reasoning as the provider adapters: the Anthropic SDK defaults to
-// a 10-minute request timeout with automatic retries, which is far
-// longer than the cron route's 60s budget can tolerate for a call that
-// runs inline during a tick (checkConsensus / handleForcedVoteTurn). The
-// SDK-level `timeout` option below is kept, but a production hang proved
-// it isn't reliably enforced on its own -- withTimeout() wraps the call
-// in a plain Promise.race so the calling code can't get stuck behind it.
-const EXTRACTION_TIMEOUT_MS = 15_000;
+// a 10-minute request timeout with automatic retries. The SDK-level
+// `timeout` option below is kept, but withTimeout() (a plain Promise.race)
+// is the actual guarantee. Confirmed directly against production that a
+// real research/turn call reading real conversational content can
+// legitimately take far longer than a trivial-content test suggested (up
+// to ~35s) -- this runs on the faster/cheaper Haiku tier and a narrower,
+// more mechanical task (report what was said, don't originate content),
+// so it's less likely to need as much margin, but it also reads the full
+// real transcript, not placeholder content, so it gets a real bump too
+// rather than assuming the old 15s was ever actually validated against
+// genuine transcript sizes.
+const EXTRACTION_TIMEOUT_MS = 25_000;
 
 const consensusExtractionSchema = z.object({
   outcome: z

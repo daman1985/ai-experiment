@@ -16,16 +16,19 @@ const TURN_MAX_TOKENS = 2000;
 
 // Diagnosed directly from a production cron tick: this SDK defaults to a
 // 10-MINUTE request timeout with automatic retries on timeout, so a slow
-// or hung web-search call just sits there far past the cron route's 60s
-// maxDuration -- the function gets hard-killed before this call's own
-// try/catch ever gets a chance to fall back gracefully. The SDK-level
-// `timeout` option below is kept, but a follow-up production hang proved
-// it isn't reliably enforced on its own -- withTimeout() wraps each call
-// in a plain Promise.race so the calling code can't get stuck behind it
-// regardless. Kept tight since up to two active runs can share one 60s
-// invocation (see cron/tick/route.ts).
-const RESEARCH_TIMEOUT_MS = 15_000;
-const TURN_TIMEOUT_MS = 20_000;
+// web-search call just sits there far past the cron route's maxDuration
+// -- the function gets hard-killed before this call's own try/catch ever
+// gets a chance to fall back gracefully. The SDK-level `timeout` option
+// below is kept, but withTimeout() (a plain Promise.race) is the actual
+// guarantee. These were originally 15s/20s on the theory that a hung call
+// needed cutting short quickly; confirmed directly against production
+// (via the Anthropic adapter, which sends the same underlying real
+// prompts) that a real web-search research call can legitimately take
+// ~35s and genuinely original turn reasoning ~24s -- not hangs, just cut
+// off too early. Raised with margin to match; kept in sync with
+// anthropic.ts's timeouts and engine.ts's MIN_TURN_BUDGET_MS.
+const RESEARCH_TIMEOUT_MS = 40_000;
+const TURN_TIMEOUT_MS = 35_000;
 
 // Uses the current `web_search` tool (not the legacy `web_search_preview`
 // this adapter originally shipped with) -- confirmed against OpenAI's own

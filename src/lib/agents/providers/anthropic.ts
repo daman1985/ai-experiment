@@ -14,15 +14,23 @@ import { logDiagnostic } from "@/lib/diagnostics";
 const RESEARCH_MAX_TOKENS = 2000;
 const TURN_MAX_TOKENS = 2000;
 
-// The SDK's own `timeout` request option is passed below too, but a real
-// production hang proved it isn't reliably enforced in this environment
-// -- the call ran the cron route's full 60s to a hard kill despite a
-// 20s timeout being set. withTimeout() is the actual guarantee: a plain
-// Promise.race the calling code can't get stuck behind regardless of
-// what the SDK does internally. Kept tight since up to two active runs
-// can share one 60s invocation (see cron/tick/route.ts).
-const RESEARCH_TIMEOUT_MS = 15_000;
-const TURN_TIMEOUT_MS = 20_000;
+// The SDK's own `timeout` request option is passed below too; withTimeout()
+// is the actual guarantee -- a plain Promise.race the calling code can't
+// get stuck behind regardless of what the SDK does internally.
+//
+// These were originally 15s/20s on the theory that a hung call needed to
+// be cut short quickly since up to two active runs could share one 60s
+// tick. That theory was wrong: confirmed directly against production via
+// a battery of real calls with the app's actual prompts (not placeholder
+// content) that a real web-search research call can legitimately take
+// ~35s, and genuinely original reasoning for a turn (inventing and
+// critiquing a real proposal, not restating trivially-prescribed content)
+// can legitimately take ~24s -- every prior "hang" was these calls being
+// cut off mid-flight, not stuck. Raised with real margin above both
+// observed times; the cron route's own maxDuration and the shared-
+// deadline math in engine.ts are raised to match (see MIN_TURN_BUDGET_MS).
+const RESEARCH_TIMEOUT_MS = 40_000;
+const TURN_TIMEOUT_MS = 35_000;
 
 export const anthropicAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
@@ -46,7 +54,7 @@ export const anthropicAdapter: ProviderAdapter = {
                 // Capped to one direct search per research turn -- per the
                 // September 2026 model-selection research, every extra internal
                 // search/code-execution iteration is tail latency this app can't
-                // afford under the 60s serverless timeout. `allowed_callers:
+                // afford under RESEARCH_TIMEOUT_MS. `allowed_callers:
                 // ["direct"]` opts out of the newer dynamic-filtering-via-code-
                 // execution default for the same reason.
                 tools: [

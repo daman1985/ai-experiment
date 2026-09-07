@@ -67,18 +67,19 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
 // optimizing this away.
 // Diagnosed directly from a production cron tick: the Anthropic and
 // OpenAI SDKs both default to a 10-MINUTE request timeout with automatic
-// retries, and a hung provider call was observed blowing straight through
-// the cron route's 60s maxDuration -- the function gets hard-killed
-// before the call's own try/catch ever runs. This SDK's default is
-// unconfirmed but the same risk applies, so it gets the same explicit
-// bound rather than trusting whatever the default turns out to be. A
-// follow-up hang proved the SDK-level `timeout` option alone isn't
-// reliably enforced in this environment either -- withTimeout() wraps
-// each call in a plain Promise.race so the calling code can't get stuck
-// behind it regardless. Kept tight since up to two active runs can share
-// one 60s invocation (see cron/tick/route.ts).
-const RESEARCH_TIMEOUT_MS = 15_000;
-const TURN_TIMEOUT_MS = 20_000;
+// retries. This SDK's default is unconfirmed but the same risk applies,
+// so it gets the same explicit bound. withTimeout() wraps each call in a
+// plain Promise.race so the calling code can't get stuck behind whatever
+// the SDK does internally. These were originally 15s/20s on the theory
+// that a hung call needed cutting short quickly; confirmed directly
+// against production (via the Anthropic adapter, which sends the same
+// underlying real prompts) that a real web-search research call can
+// legitimately take ~35s and genuinely original turn reasoning ~24s --
+// not hangs, just cut off too early. Raised with margin to match; kept
+// in sync with anthropic.ts's timeouts and engine.ts's
+// MIN_TURN_BUDGET_MS.
+const RESEARCH_TIMEOUT_MS = 40_000;
+const TURN_TIMEOUT_MS = 35_000;
 
 export const geminiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
