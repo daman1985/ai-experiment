@@ -120,6 +120,18 @@ model Run {
   isAdvancing    Boolean   @default(false)
   advancingSince DateTime?
 
+  // Set whenever the cron route actually attempts this run (whether that
+  // attempt succeeds, throws, or hits its own controlled timeout) --
+  // never set for a run the tick merely deferred without attempting.
+  // Confirmed necessary directly from production: a run whose turn call
+  // keeps timing out never records a Turn, so without this it stays
+  // first in a naive query-order every single tick, permanently starving
+  // every other active run behind it in that tick's shared deadline. The
+  // route orders activeRuns by this ascending (nulls first) instead, so
+  // a stuck run only gets retried after every other run has had its own
+  // attempt this cycle.
+  lastTickAttemptedAt DateTime?
+
   // Soft ceiling on total run spend, independent of each agent's own cap --
   // belt and suspenders in case per-agent tracking drifts. Compared against
   // sum(agent.spendUsd) + systemSpendUsd.

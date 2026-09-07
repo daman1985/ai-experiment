@@ -43,9 +43,17 @@ export async function GET(request: NextRequest) {
 
   const tickStart = Date.now();
   const deadlineAt = tickStart + maxDuration * 1000 - DEADLINE_MARGIN_MS;
+  // Least-recently-attempted first (never-attempted runs sort first of
+  // all) -- confirmed necessary directly from production: without this,
+  // a run whose turn call keeps timing out stays first in a naive
+  // query-order every tick and permanently starves every other active
+  // run sharing this tick's deadline, since they never even get
+  // attempted. This guarantees every run gets its own attempt before a
+  // repeatedly-failing one is retried.
   const activeRuns = await prisma.run.findMany({
     where: { status: "ACTIVE" },
     select: { id: true },
+    orderBy: { lastTickAttemptedAt: { sort: "asc", nulls: "first" } },
   });
   // TEMPORARY: diagnosing repeated 60s timeouts on this route. Every
   // active run is processed sequentially in one invocation -- if there
@@ -68,6 +76,11 @@ export async function GET(request: NextRequest) {
     }
     console.log(`[cron/tick] advancing ${run.id} (+${runStart - tickStart}ms since tick start)`);
     try {
+      // Recorded before the call, not after -- an attempt that throws or
+      // times out still counts as "attempted" for fairness-ordering
+      // purposes; only a run this tick never got to (see the deferred
+      // branch above) should keep its place at the front of the queue.
+      await prisma.run.update({ where: { id: run.id }, data: { lastTickAttemptedAt: new Date() } });
       const result = await advanceRun(run.id, deadlineAt);
       console.log(
         `[cron/tick] ${run.id} done in ${Date.now() - runStart}ms: ${JSON.stringify(result)}`,
