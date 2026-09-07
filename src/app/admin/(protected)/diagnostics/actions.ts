@@ -11,9 +11,19 @@ import { turnOutputSchema } from "@/lib/agents/schema";
 
 // Wipes every recorded event so the next action's output is unambiguous
 // -- otherwise fresh results sit above a growing pile of old ones and
-// it's easy to mistake a stale error for a new one at a glance.
+// it's easy to mistake a stale error for a new one at a glance. Logs its
+// own count/timestamp *after* clearing (the one deliberate exception to
+// "this button empties the log") so a click that doesn't visibly do
+// anything is instantly diagnosable: if this line doesn't appear, the
+// click never reached the server at all (stale page, browser cache) --
+// no need to guess.
 export async function clearDiagnosticsAction(): Promise<void> {
-  await prisma.diagnosticEvent.deleteMany({});
+  const { count } = await prisma.diagnosticEvent.deleteMany({});
+  await logDiagnostic({
+    source: "diagnose:clear",
+    level: "info",
+    message: `cleared ${count} event(s)`,
+  });
   revalidatePath("/admin/diagnostics");
 }
 
