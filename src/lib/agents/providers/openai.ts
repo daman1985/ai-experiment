@@ -50,20 +50,21 @@ export const openaiAdapter: ProviderAdapter = {
     if (input.enableResearch) {
       try {
         const researchResponse = await withTimeout(
-          client.responses.create(
-            {
-              model: input.modelId,
-              instructions: input.systemPrompt,
-              // No max-calls-per-turn equivalent to Anthropic's max_uses is
-              // exposed on this tool type -- search_context_size: "low"
-              // trims how much each individual search processes, but the
-              // request timeout below is the real backstop against an
-              // open-ended multi-search loop.
-              tools: [{ type: "web_search", search_context_size: "low" }],
-              input: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-            },
-            { timeout: RESEARCH_TIMEOUT_MS },
-          ),
+          (signal) =>
+            client.responses.create(
+              {
+                model: input.modelId,
+                instructions: input.systemPrompt,
+                // No max-calls-per-turn equivalent to Anthropic's max_uses is
+                // exposed on this tool type -- search_context_size: "low"
+                // trims how much each individual search processes, but the
+                // request timeout below is the real backstop against an
+                // open-ended multi-search loop.
+                tools: [{ type: "web_search", search_context_size: "low" }],
+                input: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+              },
+              { timeout: RESEARCH_TIMEOUT_MS, signal },
+            ),
           RESEARCH_TIMEOUT_MS,
           "OpenAI research call",
         );
@@ -116,30 +117,31 @@ export const openaiAdapter: ProviderAdapter = {
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
     const turnResponse = await withTimeout(
-      client.responses.parse(
-        {
-          model: input.modelId,
-          instructions: input.systemPrompt,
-          text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
-          input:
-            imageDocs.length === 0
-              ? turnText
-              : [
-                  {
-                    role: "user" as const,
-                    content: [
-                      { type: "input_text" as const, text: turnText },
-                      ...imageDocs.map((d) => ({
-                        type: "input_image" as const,
-                        image_url: `data:${d.mimeType};base64,${d.content}`,
-                        detail: "auto" as const,
-                      })),
-                    ],
-                  },
-                ],
-        },
-        { timeout: TURN_TIMEOUT_MS },
-      ),
+      (signal) =>
+        client.responses.parse(
+          {
+            model: input.modelId,
+            instructions: input.systemPrompt,
+            text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
+            input:
+              imageDocs.length === 0
+                ? turnText
+                : [
+                    {
+                      role: "user" as const,
+                      content: [
+                        { type: "input_text" as const, text: turnText },
+                        ...imageDocs.map((d) => ({
+                          type: "input_image" as const,
+                          image_url: `data:${d.mimeType};base64,${d.content}`,
+                          detail: "auto" as const,
+                        })),
+                      ],
+                    },
+                  ],
+          },
+          { timeout: TURN_TIMEOUT_MS, signal },
+        ),
       TURN_TIMEOUT_MS,
       "OpenAI turn call",
     );

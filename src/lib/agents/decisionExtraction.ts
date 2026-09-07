@@ -54,16 +54,17 @@ async function callExtraction<T>(
 ): Promise<{ result: T; inputTokens: number; outputTokens: number }> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const response = await withTimeout(
-    client.messages.parse(
-      {
-        model: EXTRACTION_MODEL_ID,
-        max_tokens: 1000,
-        system,
-        output_config: { format: zodOutputFormat(schema) },
-        messages: [{ role: "user", content: prompt }],
-      },
-      { timeout: EXTRACTION_TIMEOUT_MS },
-    ),
+    (signal) =>
+      client.messages.parse(
+        {
+          model: EXTRACTION_MODEL_ID,
+          max_tokens: 1000,
+          system,
+          output_config: { format: zodOutputFormat(schema) },
+          messages: [{ role: "user", content: prompt }],
+        },
+        { timeout: EXTRACTION_TIMEOUT_MS, signal },
+      ),
     EXTRACTION_TIMEOUT_MS,
     "Decision extraction call",
   );

@@ -128,16 +128,17 @@ export async function runExpertAudit(
   const prompt = `Transcript leading to this decision:\n\n${formatAuditTranscript(turns)}\n\n---\n\n${formatAuditDecision(decision)}\n\n---\n\nAudit this decision.`;
 
   const response = await withTimeout(
-    client.messages.parse(
-      {
-        model: modelId,
-        max_tokens: 4000,
-        system: EXPERT_AUDIT_SYSTEM_PROMPT,
-        output_config: { format: zodOutputFormat(expertAuditSchema) },
-        messages: [{ role: "user", content: prompt }],
-      },
-      { timeout: AUDIT_TIMEOUT_MS },
-    ),
+    (signal) =>
+      client.messages.parse(
+        {
+          model: modelId,
+          max_tokens: 4000,
+          system: EXPERT_AUDIT_SYSTEM_PROMPT,
+          output_config: { format: zodOutputFormat(expertAuditSchema) },
+          messages: [{ role: "user", content: prompt }],
+        },
+        { timeout: AUDIT_TIMEOUT_MS, signal },
+      ),
     AUDIT_TIMEOUT_MS,
     "Expert audit call",
   );

@@ -91,15 +91,21 @@ export const geminiAdapter: ProviderAdapter = {
     if (input.enableResearch) {
       try {
         const researchResponse = await withTimeout(
-          ai.models.generateContent({
-            model: input.modelId,
-            contents: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-            config: {
-              systemInstruction: input.systemPrompt,
-              tools: [{ googleSearch: {} }],
-              httpOptions: { timeout: RESEARCH_TIMEOUT_MS },
-            },
-          }),
+          (signal) =>
+            ai.models.generateContent({
+              model: input.modelId,
+              contents: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+              config: {
+                systemInstruction: input.systemPrompt,
+                tools: [{ googleSearch: {} }],
+                httpOptions: { timeout: RESEARCH_TIMEOUT_MS },
+                // Per @google/genai's own doc comment on this field: this is
+                // client-only and does not stop billing on Google's side --
+                // unlike the Anthropic/OpenAI adapters, this doesn't recover
+                // wasted spend, just the dangling connection.
+                abortSignal: signal,
+              },
+            }),
           RESEARCH_TIMEOUT_MS,
           "Gemini research call",
         );
@@ -137,29 +143,31 @@ export const geminiAdapter: ProviderAdapter = {
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
     const turnResponse = await withTimeout(
-      ai.models.generateContent({
-        model: input.modelId,
-        contents:
-          imageDocs.length === 0
-            ? turnText
-            : [
-                {
-                  role: "user",
-                  parts: [
-                    { text: turnText },
-                    ...imageDocs.map((d) => ({
-                      inlineData: { mimeType: d.mimeType, data: d.content },
-                    })),
-                  ],
-                },
-              ],
-        config: {
-          systemInstruction: input.systemPrompt,
-          responseMimeType: "application/json",
-          responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
-          httpOptions: { timeout: TURN_TIMEOUT_MS },
-        },
-      }),
+      (signal) =>
+        ai.models.generateContent({
+          model: input.modelId,
+          contents:
+            imageDocs.length === 0
+              ? turnText
+              : [
+                  {
+                    role: "user",
+                    parts: [
+                      { text: turnText },
+                      ...imageDocs.map((d) => ({
+                        inlineData: { mimeType: d.mimeType, data: d.content },
+                      })),
+                    ],
+                  },
+                ],
+          config: {
+            systemInstruction: input.systemPrompt,
+            responseMimeType: "application/json",
+            responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
+            httpOptions: { timeout: TURN_TIMEOUT_MS },
+            abortSignal: signal,
+          },
+        }),
       TURN_TIMEOUT_MS,
       "Gemini turn call",
     );

@@ -35,34 +35,35 @@ export const anthropicAdapter: ProviderAdapter = {
     if (input.enableResearch) {
       try {
         const researchResponse = await withTimeout(
-          client.messages.create(
-            {
-              model: input.modelId,
-              max_tokens: RESEARCH_MAX_TOKENS,
-              system: input.systemPrompt,
-              // Capped to one direct search per research turn -- per the
-              // September 2026 model-selection research, every extra internal
-              // search/code-execution iteration is tail latency this app can't
-              // afford under the 60s serverless timeout. `allowed_callers:
-              // ["direct"]` opts out of the newer dynamic-filtering-via-code-
-              // execution default for the same reason.
-              tools: [
-                {
-                  type: "web_search_20260318",
-                  name: "web_search",
-                  max_uses: 1,
-                  allowed_callers: ["direct"],
-                },
-              ],
-              messages: [
-                {
-                  role: "user",
-                  content: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-                },
-              ],
-            },
-            { timeout: RESEARCH_TIMEOUT_MS },
-          ),
+          (signal) =>
+            client.messages.create(
+              {
+                model: input.modelId,
+                max_tokens: RESEARCH_MAX_TOKENS,
+                system: input.systemPrompt,
+                // Capped to one direct search per research turn -- per the
+                // September 2026 model-selection research, every extra internal
+                // search/code-execution iteration is tail latency this app can't
+                // afford under the 60s serverless timeout. `allowed_callers:
+                // ["direct"]` opts out of the newer dynamic-filtering-via-code-
+                // execution default for the same reason.
+                tools: [
+                  {
+                    type: "web_search_20260318",
+                    name: "web_search",
+                    max_uses: 1,
+                    allowed_callers: ["direct"],
+                  },
+                ],
+                messages: [
+                  {
+                    role: "user",
+                    content: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+                  },
+                ],
+              },
+              { timeout: RESEARCH_TIMEOUT_MS, signal },
+            ),
           RESEARCH_TIMEOUT_MS,
           "Anthropic research call",
         );
@@ -121,38 +122,39 @@ export const anthropicAdapter: ProviderAdapter = {
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
     const turnResponse = await withTimeout(
-      client.messages.parse(
-        {
-          model: input.modelId,
-          max_tokens: TURN_MAX_TOKENS,
-          system: input.systemPrompt,
-          output_config: { format: zodOutputFormat(turnOutputSchema) },
-          messages: [
-            {
-              role: "user",
-              content:
-                imageDocs.length === 0
-                  ? turnText
-                  : [
-                      { type: "text", text: turnText },
-                      ...imageDocs.map((d) => ({
-                        type: "image" as const,
-                        source: {
-                          type: "base64" as const,
-                          media_type: d.mimeType as
-                            | "image/jpeg"
-                            | "image/png"
-                            | "image/gif"
-                            | "image/webp",
-                          data: d.content,
-                        },
-                      })),
-                    ],
-            },
-          ],
-        },
-        { timeout: TURN_TIMEOUT_MS },
-      ),
+      (signal) =>
+        client.messages.parse(
+          {
+            model: input.modelId,
+            max_tokens: TURN_MAX_TOKENS,
+            system: input.systemPrompt,
+            output_config: { format: zodOutputFormat(turnOutputSchema) },
+            messages: [
+              {
+                role: "user",
+                content:
+                  imageDocs.length === 0
+                    ? turnText
+                    : [
+                        { type: "text", text: turnText },
+                        ...imageDocs.map((d) => ({
+                          type: "image" as const,
+                          source: {
+                            type: "base64" as const,
+                            media_type: d.mimeType as
+                              | "image/jpeg"
+                              | "image/png"
+                              | "image/gif"
+                              | "image/webp",
+                            data: d.content,
+                          },
+                        })),
+                      ],
+              },
+            ],
+          },
+          { timeout: TURN_TIMEOUT_MS, signal },
+        ),
       TURN_TIMEOUT_MS,
       "Anthropic turn call",
     );
