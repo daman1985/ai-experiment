@@ -107,7 +107,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                   {a.displayName}
                   {a.assignedRole && ` (${a.assignedRole})`}
                 </span>
-                : {fmtUsd(Number(a.spendUsd))} / {fmtUsd(Number(a.budgetCapUsd))}
+                {`: ${fmtUsd(Number(a.spendUsd))} / ${fmtUsd(Number(a.budgetCapUsd))}`}
                 {!a.isActive && " · inactive"}
               </span>
             ))}

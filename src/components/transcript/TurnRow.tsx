@@ -44,7 +44,7 @@ export function TurnRow({
       aria-setsize={setsize}
       aria-label={`${turn.agent.displayName}, round ${turn.roundNumber + 1}`}
       tabIndex={tabIndex}
-      className={`border-b border-l-2 border-border py-4 pl-4 pr-1 outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${styles.rowBg} ${styles.rowBorder}`}
+      className={`border-b border-l-2 border-border px-4 py-4 outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${styles.rowBg} ${styles.rowBorder}`}
     >
       <div className="grid grid-cols-[2rem_1fr] gap-3">
         <AgentAvatar provider={turn.agent.provider} displayName={turn.agent.displayName} />

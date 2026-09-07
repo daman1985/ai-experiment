@@ -112,6 +112,19 @@ anyone's visual identity.
 - Borders over shadows for ordinary separation; shadows reserved for
   things that actually float above other content (menus, dialogs,
   popovers).
+- Padding/margin on a box is symmetric by default (`px-4` not
+  `pl-4 pr-1`) — an asymmetric value needs a deliberate reason (e.g. a
+  marginalia rule that's genuinely meant to hang off one edge only,
+  like the weakness-critique left border) and should read as an
+  obvious exception, not a typo. Caught as a real bug in `TurnRow`
+  (`pl-4 pr-1`, fixed to `px-4`) during a design QA pass — worth
+  actively scanning for when reviewing any new component.
+- Numeric/enum formatting goes through the shared helpers
+  (`fmtUsd`/`formatPhase` in `src/lib/format.ts`), never re-implemented
+  inline per screen — caught the Dashboard hand-rolling
+  `.toFixed(4)`/`.toFixed(2)` (inconsistent precision vs. the run
+  viewer's `fmtUsd`) and printing the raw `Phase` enum instead of
+  `formatPhase()` during the same pass.
 - Cards/rows in the same visual row do not need identical internal
   anatomy — in fact they read better when they aren't identical
   (Mercury's Credit Card / Bill Pay / Invoicing row is the concrete
@@ -323,6 +336,54 @@ were deleted afterward (`Test run 1` is back to its original 4 turns).
 
 Remaining: Phase 6 (real-content validation once a run produces enough
 transcript to stress-test the layout for real).
+
+**Design QA pass (bug-fix level) done** across all four screens at
+375/768/1280/1600px via Playwright: fixed `TurnRow`'s asymmetric
+`pl-4 pr-1` (see the new "Borrowed craft" bullet above), a stray
+`</span>: ` line-break that happened to read fine in the DOM but was
+worth double-checking, and two Dashboard formatting inconsistencies
+(hand-rolled `.toFixed()` instead of `fmtUsd`, raw `Phase` enum instead
+of `formatPhase()`) against the run viewer. Also fixed: the Dashboard's
+"New run" budget/round-cap fields were a hard `grid-cols-3`, which wraps
+label text ("Per-agent" / "budget ($)") awkwardly at ~375px — now
+`grid-cols-1 sm:grid-cols-3`.
+
+**Open question, explicitly not decided here: does the current
+execution clear "genuinely next-level," or only "clean and
+consistent"?** The admin's original ask (see top-level framing) was
+"best of the best in the industry, cutting edge" — a higher bar than
+bug-free. Honest read after this pass: every screen is now internally
+consistent and free of the sloppiness class of issue (alignment,
+spacing, formatting, responsive wrapping), but the overall visual
+execution reads closer to "a well-built, tasteful light-theme SaaS
+app" than to something a design-forward reviewer would call
+distinctive on sight. The likely levers, in rough order of leverage,
+if the admin wants to invest further (none of these are decided —
+surfacing them, not choosing one):
+- The teal accent + Newsreader/Geist pairing is tasteful but is also
+  close to a fairly common "editorial SaaS" combination right now
+  (serif display + neutral sans, one muted jewel-tone accent) — it
+  doesn't yet feel unmistakably *this app's*.
+- The decision-break moment (the one spot the doc explicitly asks to
+  read as a deliberate interruption) currently uses `bg-surface-hover`,
+  which is very close in value to the canvas background — at a glance
+  it barely reads as a break at all. This is a case where the
+  *mechanism* (full-width break in the feed) is right per the doc, but
+  the current visual weight undersells it.
+- The turn-order stepper — the doc's own "one deliberate personality
+  touch" — renders as 8–10px dots that are easy to miss entirely at
+  normal viewing distance; it's currently more decorative footnote
+  than a genuine signature motif.
+- On wide viewports the transcript column sits in the middle of a lot
+  of flat, empty canvas on both sides — correct per the "don't stretch
+  the reading column" rule, but the doc also floated a metadata
+  inspector as the alternative use of that space, and that was never
+  built. Right now the whitespace reads as "unfinished" rather than
+  "deliberate," on close inspection.
+None of these are bugs and none were changed in this pass — they're
+subjective-direction calls squarely in "ours to invent" territory, so
+they're recorded here for the admin to weigh in on rather than acted on
+unilaterally.
 
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { runStatusVariant } from "@/lib/format";
+import { fmtUsd, formatPhase, runStatusVariant } from "@/lib/format";
 
 // This reads live run/agent state and requires an authenticated session --
 // never prerender it at build time.
@@ -51,14 +51,14 @@ export default async function AdminDashboard() {
                 </Link>
               </div>
               <div className="mt-2 tabular-nums text-text-secondary">
-                Phase: {run.currentPhase} &middot; Spend: ${totalSpend.toFixed(4)} / $
-                {Number(run.totalBudgetCapUsd).toFixed(2)}
+                Phase: {formatPhase(run.currentPhase)} &middot; Spend:{" "}
+                {fmtUsd(totalSpend)} / {fmtUsd(Number(run.totalBudgetCapUsd))}
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 tabular-nums text-text-tertiary">
                 {run.agents.map((a) => (
                   <span key={a.id}>
-                    {a.displayName}: ${Number(a.spendUsd).toFixed(4)} / $
-                    {Number(a.budgetCapUsd).toFixed(2)} {a.isActive ? "" : "(inactive)"}
+                    {a.displayName}: {fmtUsd(Number(a.spendUsd))} /{" "}
+                    {fmtUsd(Number(a.budgetCapUsd))} {a.isActive ? "" : "(inactive)"}
                   </span>
                 ))}
               </div>
@@ -127,7 +127,7 @@ export default async function AdminDashboard() {
               })}
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <label className="mb-1 block text-sm text-text-secondary">Per-agent budget ($)</label>
               <Input type="number" step="0.01" name="perAgentBudget" defaultValue={30} required />
