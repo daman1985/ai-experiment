@@ -3,7 +3,6 @@ import { prisma } from "@/lib/db";
 import { LiveTranscript, NewItemFade } from "@/components/transcript/LiveTranscript";
 import { AgentAvatar } from "@/components/transcript/AgentAvatar";
 import { TurnStepper } from "@/components/transcript/TurnStepper";
-import { PhaseDivider } from "@/components/transcript/PhaseDivider";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
@@ -19,7 +18,6 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
     where: { id },
     include: {
       agents: { orderBy: { seatIndex: "asc" } },
-      phases: { orderBy: { orderIndex: "asc" } },
       turns: {
         orderBy: { sequenceNumber: "asc" },
         include: { agent: true, yieldToAgent: true, artifacts: true },
@@ -30,21 +28,23 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
   });
   if (!run) notFound();
 
-  const phasesById = new Map(run.phases.map((p) => [p.id, p]));
-  const currentPhase = run.phases.find((p) => p.orderIndex === run.currentPhaseIndex) ?? null;
-
   const totalSpend =
     run.agents.reduce((sum, a) => sum + Number(a.spendUsd), 0) + Number(run.systemSpendUsd);
 
   const activeAgents = run.agents.filter((a) => a.isActive);
   let currentAgentId: string | null = null;
-  if ((run.status === "ACTIVE" || run.status === "PAUSED") && currentPhase && activeAgents.length >= 2) {
-    const turnsInPhase = run.turns.filter((t) => t.phaseId === currentPhase.id).length;
+  if ((run.status === "ACTIVE" || run.status === "PAUSED") && activeAgents.length >= 2) {
+    const lastDecision = [...run.decisions].sort(
+      (a, b) => b.afterSequenceNumber - a.afterSequenceNumber,
+    )[0];
+    const turnsSinceDecision = run.turns.filter(
+      (t) => t.sequenceNumber > (lastDecision?.afterSequenceNumber ?? 0),
+    ).length;
     // Mirrors the rotating-first-speaker formula in lib/agents/engine.ts
     // exactly, so the stepper never drifts from what the next cron tick
     // will actually do.
-    const roundNumberForTurn = Math.floor(turnsInPhase / activeAgents.length);
-    const speakerIndex = (turnsInPhase + roundNumberForTurn) % activeAgents.length;
+    const roundNumberForTurn = Math.floor(turnsSinceDecision / activeAgents.length);
+    const speakerIndex = (turnsSinceDecision + roundNumberForTurn) % activeAgents.length;
     currentAgentId = run.pendingYieldToAgentId ?? activeAgents[speakerIndex].id;
   }
 
@@ -60,15 +60,6 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
     ...run.turns.map((t): FeedItem => ({ kind: "turn", at: t.createdAt, turn: t })),
     ...run.decisions.map((d): FeedItem => ({ kind: "decision", at: d.decidedAt, decision: d })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
-
-  const artifactsByPhaseId = new Map<string, typeof run.artifacts>();
-  for (const artifact of run.artifacts) {
-    const list = artifactsByPhaseId.get(artifact.phaseId) ?? [];
-    list.push(artifact);
-    artifactsByPhaseId.set(artifact.phaseId, list);
-  }
-
-  let lastPhaseId: string | null = null;
 
   // Plain, serializable metadata for LiveTranscript to diff between polls
   // -- Turn/Decision carry Prisma Decimal fields that can't cross the
@@ -99,7 +90,6 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
           <p className="text-sm text-text-secondary">{run.topic}</p>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text-secondary">
             <Badge variant={runStatusVariant(run.status)}>{run.status}</Badge>
-            {currentPhase && <span>{currentPhase.name}</span>}
             <span className="tabular-nums">
               {fmtUsd(totalSpend)} / {fmtUsd(Number(run.totalBudgetCapUsd))}
             </span>
@@ -111,10 +101,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                 className="flex items-center gap-1.5 text-xs tabular-nums text-text-tertiary"
               >
                 <AgentAvatar provider={a.provider} displayName={a.displayName} size="sm" />
-                <span className={AGENT_STYLES[a.provider].text}>
-                  {a.displayName}
-                  {a.assignedRole && ` (${a.assignedRole})`}
-                </span>
+                <span className={AGENT_STYLES[a.provider].text}>{a.displayName}</span>
                 {`: ${fmtUsd(Number(a.spendUsd))} / ${fmtUsd(Number(a.budgetCapUsd))}`}
                 {!a.isActive && " · inactive"}
               </span>
@@ -128,9 +115,6 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               <p className="text-sm text-text-tertiary">No turns yet — start the run to begin.</p>
             )}
             {feed.map((item, index) => {
-              const phaseId = item.kind === "turn" ? item.turn.phaseId : item.decision.phaseId;
-              const showPhaseHeader = phaseId !== lastPhaseId;
-              lastPhaseId = phaseId;
               const key = item.kind === "turn" ? item.turn.id : item.decision.id;
               // Roving tabindex + the ARIA "feed" pattern's aria-posinset/
               // aria-setsize -- see docs/design-system.md, "Long-transcript
@@ -142,9 +126,6 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               const tabIndex = index === 0 ? 0 : -1;
               return (
                 <div key={key}>
-                  {showPhaseHeader && (
-                    <PhaseDivider phaseName={phasesById.get(phaseId)?.name ?? "Untitled phase"} />
-                  )}
                   <NewItemFade>
                     {item.kind === "turn" ? (
                       <TurnRow
@@ -170,42 +151,35 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
         </LiveTranscript>
 
         {run.artifacts.length > 0 && (
-          <section className="mt-10 space-y-6" aria-label="Artifacts">
+          <section className="mt-10 space-y-2" aria-label="Artifacts">
             <h2 className="font-serif text-lg text-text-primary">Artifacts</h2>
-            {[...artifactsByPhaseId.entries()].map(([phaseId, items]) => (
-              <div key={phaseId} className="space-y-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
-                  {phasesById.get(phaseId)?.name ?? "Untitled phase"}
-                </h3>
-                {items.map((a) => (
-                  <details key={a.id} className="rounded-md border border-border bg-surface px-3 py-2">
-                    <summary className="cursor-pointer list-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-2">
-                          <Badge variant="neutral">{a.type}</Badge>
-                          <span className="truncate font-medium text-text-primary">{a.title}</span>
-                        </span>
-                        {a.turn && (
-                          <a
-                            href={`#turn-${a.turn.sequenceNumber}`}
-                            className="shrink-0 rounded-sm text-xs text-text-tertiary outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent"
-                          >
-                            View in transcript &uarr;
-                          </a>
-                        )}
-                      </div>
-                      {a.createdByAgent && (
-                        <p className="mt-0.5 text-xs text-text-tertiary">
-                          by {a.createdByAgent.displayName}
-                        </p>
-                      )}
-                    </summary>
-                    <pre className="mt-2 whitespace-pre-wrap border-t border-border pt-2 font-sans text-sm text-text-secondary">
-                      {a.content}
-                    </pre>
-                  </details>
-                ))}
-              </div>
+            {run.artifacts.map((a) => (
+              <details key={a.id} className="rounded-md border border-border bg-surface px-3 py-2">
+                <summary className="cursor-pointer list-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Badge variant="neutral">{a.type}</Badge>
+                      <span className="truncate font-medium text-text-primary">{a.title}</span>
+                    </span>
+                    {a.turn && (
+                      <a
+                        href={`#turn-${a.turn.sequenceNumber}`}
+                        className="shrink-0 rounded-sm text-xs text-text-tertiary outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        View in transcript &uarr;
+                      </a>
+                    )}
+                  </div>
+                  {a.createdByAgent && (
+                    <p className="mt-0.5 text-xs text-text-tertiary">
+                      by {a.createdByAgent.displayName}
+                    </p>
+                  )}
+                </summary>
+                <pre className="mt-2 whitespace-pre-wrap border-t border-border pt-2 font-sans text-sm text-text-secondary">
+                  {a.content}
+                </pre>
+              </details>
             ))}
           </section>
         )}

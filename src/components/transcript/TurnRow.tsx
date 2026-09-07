@@ -34,7 +34,7 @@ export function TurnRow({
   setsize: number;
 }) {
   const styles = AGENT_STYLES[turn.agent.provider];
-  const hasStatus = turn.readyToDecide || turn.yieldToAgent || turn.isVote;
+  const hasStatus = turn.readyToDecide || turn.runComplete || turn.yieldToAgent || turn.isVote;
 
   return (
     <div
@@ -50,14 +50,7 @@ export function TurnRow({
         <AgentAvatar provider={turn.agent.provider} displayName={turn.agent.displayName} />
         <div className="min-w-0">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <span className={`text-sm font-semibold ${styles.text}`}>
-              {turn.agent.displayName}
-              {turn.agent.assignedRole && (
-                <span className="ml-1.5 font-normal text-text-tertiary">
-                  &middot; {turn.agent.assignedRole}
-                </span>
-              )}
-            </span>
+            <span className={`text-sm font-semibold ${styles.text}`}>{turn.agent.displayName}</span>
             <span className="tabular-nums text-xs text-text-tertiary">
               round {turn.roundNumber + 1} &middot; confidence{" "}
               {turn.confidenceBeforePeerUpdate.toFixed(2)}&rarr;
@@ -78,6 +71,7 @@ export function TurnRow({
           {hasStatus && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {turn.readyToDecide && <Badge variant="success">Ready to decide</Badge>}
+              {turn.runComplete && <Badge variant="success">Believes topic resolved</Badge>}
               {turn.yieldToAgent && (
                 <Badge variant="neutral">Yielded to {turn.yieldToAgent.displayName}</Badge>
               )}

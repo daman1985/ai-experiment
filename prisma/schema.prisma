@@ -57,24 +57,33 @@ model Run {
   id     String    @id @default(cuid())
   name   String?
   // What the room is actually discussing -- free text, admin-supplied at
-  // creation. Originally hardcoded to "what business should we start";
-  // now the room can be given any topic. Fed into the system prompt in
-  // place of the old fixed business-founding framing.
+  // creation. The only content-steering input the admin gives: no phases,
+  // stages, or per-topic guidance are defined ahead of time. Whether and
+  // how the room breaks this into stages, assigns roles, or organizes
+  // itself is left entirely to the agents -- see docs/design-system.md,
+  // "Full autonomy, not admin-scripted phases."
   topic  String
   status RunStatus @default(DRAFT)
 
-  // Position into `phases` (ordered by RunPhase.orderIndex) -- replaces
-  // the old fixed Phase enum. See RunPhase below for why.
-  currentPhaseIndex Int @default(0)
+  // Rounds of back-and-forth allowed since the last decision (or since the
+  // run started, if there hasn't been one yet) before a forced vote --
+  // mechanical pacing, not content steering. Compared against
+  // activeAgents.length so it scales with room size.
+  forcedVoteRoundCap Int     @default(6)
+  // Whether agents get the web-search tool. A single run-wide toggle --
+  // there's no admin-defined stage to hang a per-stage version off of
+  // anymore, and the cost/capability tradeoff doesn't depend on topic
+  // content.
+  allowsResearch     Boolean @default(true)
 
-  // Round-robin turn order is derived, not stored: the Nth turn in a phase
-  // goes to activeAgents[N mod activeAgents.length], with the starting
-  // seat rotated by round to avoid a permanent first-mover advantage (see
-  // lib/agents/engine.ts). A yield substitutes a named agent into that
-  // slot for one tick instead of adding an extra turn, so every active
-  // agent still gets exactly one turn per lap regardless of how many
-  // yields happened along the way. pendingYieldToAgentId is the only
-  // rotation state that actually needs to persist between ticks;
+  // Round-robin turn order is derived, not stored: the Nth turn since the
+  // last decision goes to activeAgents[N mod activeAgents.length], with
+  // the starting seat rotated by round to avoid a permanent first-mover
+  // advantage (see lib/agents/engine.ts). A yield substitutes a named
+  // agent into that slot for one tick instead of adding an extra turn, so
+  // every active agent still gets exactly one turn per lap regardless of
+  // how many yields happened along the way. pendingYieldToAgentId is the
+  // only rotation state that actually needs to persist between ticks;
   // roundNumber is a cached display value, recomputed from the turn count
   // on every tick, not authoritative.
   pendingYieldToAgentId String?
@@ -96,49 +105,9 @@ model Run {
   endedAt   DateTime?
 
   agents    Agent[]
-  phases    RunPhase[]
   turns     Turn[]
   decisions Decision[]
   artifacts Artifact[]
-}
-
-// One stage of a run's discussion, admin-defined at run-creation time
-// (with a business-lifecycle template pre-filled by default, editable or
-// replaceable for any other topic). Replaces the old fixed
-// IDEATION/ROLE_ASSIGNMENT/OPERATION enum -- a topic-agnostic room can't
-// assume every topic has a natural "assign roles" or "operate" stage.
-// Phases resolve in admin-defined order: each one ends when the room
-// reaches consensus or its own round cap forces a vote, producing a
-// Decision, before the room moves to the next phase -- or, on the last
-// phase, the run completes.
-model RunPhase {
-  id         String @id @default(cuid())
-  runId      String
-  run        Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
-  orderIndex Int
-  name       String
-  // Freeform phase-specific instruction injected into the system prompt
-  // for turns taken during this phase (replaces the old hardcoded
-  // PHASE_GUIDANCE record keyed by enum value).
-  guidance   String
-  roundCapPerPhase Int @default(10)
-  // When true, a resolved consensus is additionally parsed into
-  // per-agent Agent.assignedRole values (the "who does what" extraction
-  // the original business-founding template used for its second phase).
-  // Opt-in per phase rather than hardcoded to a phase name, so any topic
-  // can include a "divide up responsibilities" stage if it wants one.
-  assignsRoles     Boolean @default(false)
-  // Whether agents get the web-search tool during this phase. The
-  // original template disabled it for its open-ended "operate the
-  // business" phase (a forced vote there could still search) -- kept as
-  // a per-phase choice rather than hardcoded to a phase name.
-  allowsResearch   Boolean @default(true)
-
-  turns     Turn[]
-  decisions Decision[]
-  artifacts Artifact[]
-
-  @@unique([runId, orderIndex])
 }
 
 model Agent {
@@ -153,10 +122,6 @@ model Agent {
 
   budgetCapUsd Decimal @default(30) @db.Decimal(10, 2)
   spendUsd     Decimal @default(0) @db.Decimal(10, 6)
-
-  // A role only exists once a role-assigning phase resolves (e.g. "CEO",
-  // "Head of Product") -- left null until then.
-  assignedRole String?
 
   // False once this agent's budget cap is hit or it errors out repeatedly;
   // skipped in rotation but its turns remain in the transcript.
@@ -184,9 +149,6 @@ model Turn {
   agentId String
   agent   Agent  @relation("TurnAgent", fields: [agentId], references: [id])
 
-  phaseId String
-  phase   RunPhase @relation(fields: [phaseId], references: [id])
-
   roundNumber    Int
   sequenceNumber Int // global monotonic order within the run
 
@@ -204,6 +166,11 @@ model Turn {
   confidenceAfterPeerUpdate  Float
 
   readyToDecide  Boolean @default(false)
+  // True only when this agent believes the entire topic is now fully
+  // resolved and the room's work is done, not just that this particular
+  // decision is ready -- see the ground rules in lib/agents/prompt.ts.
+  // Checked only once readyToDecide is unanimous; almost always false.
+  runComplete    Boolean @default(false)
   yieldToAgentId String?
   yieldToAgent   Agent?  @relation("TurnYieldTarget", fields: [yieldToAgentId], references: [id])
 
@@ -229,11 +196,16 @@ model Decision {
   id      String @id @default(cuid())
   runId   String
   run     Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
-  phaseId String
-  phase   RunPhase       @relation(fields: [phaseId], references: [id])
   outcome String // e.g. the chosen approach, or the full role assignment
   method    DecisionMethod
   dissent   Json? // { agentId: string, reason: string }[] when not unanimous
+
+  // The highest Turn.sequenceNumber that existed in the run when this
+  // decision resolved. The conversation is one continuous transcript with
+  // no phase resets, so this is how the engine finds "turns since the
+  // last decision" for round-cap purposes without re-scoping anything by
+  // phase.
+  afterSequenceNumber Int
 
   // Automated pre-mortem, extracted once when the decision resolves --
   // a structural analog to an "enhancing cognition"-style re-evaluation
@@ -257,8 +229,6 @@ model Artifact {
   id               String  @id @default(cuid())
   runId            String
   run              Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
-  phaseId          String
-  phase            RunPhase @relation(fields: [phaseId], references: [id])
   type             String
   title            String
   content          String

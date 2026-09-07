@@ -495,6 +495,54 @@ Decision inserted via psql (no real provider call, since this is pure
 schema/rendering verification) — confirmed the "Untested: ... If
 wrong: ..." annotation renders correctly under a decision break.
 
+**Full autonomy, not admin-scripted phases (done, before the first real
+run).** The free-form `RunPhase` model (Phase 9/10 above) still had the
+admin pre-defining a sequence of named phases with directive `guidance`
+text and a hard transcript reset at each boundary — a parameterized
+version of the same scripted structure as the original fixed
+IDEATION/ROLE_ASSIGNMENT/OPERATION enum, not actual autonomy. Caught
+before spending real API budget on the first live run. `RunPhase` is
+removed entirely: a run is now one continuous transcript from start to
+completion, with no admin-authored stages or guidance beyond the topic
+itself. What changed:
+
+- **Schema**: `RunPhase` deleted. `Run` gained `forcedVoteRoundCap`
+  (rounds since the last decision, or since the start, before a forced
+  vote — a pacing dial, not content) and `allowsResearch` (one run-wide
+  toggle). `Turn`/`Decision`/`Artifact` lost `phaseId`. `Decision` gained
+  `afterSequenceNumber` (the run's max `Turn.sequenceNumber` at the
+  moment it resolved) so the engine can compute "turns since the last
+  decision" without any phase to scope by. `Turn` gained `runComplete`
+  (mirrors `readyToDecide`'s pattern: reported every turn, checked only
+  once `readyToDecide` is unanimous). `Agent.assignedRole` removed along
+  with the `assignsRoles`/`extractRoleAssignment` special case — role
+  assignment, if the room does it, is just conversation content now, not
+  a structurally parsed field.
+- **Prompt layer**: no more "Current phase: X. {guidance}" injection.
+  Ground rules now state plainly that there's no predefined structure,
+  stages, or admin-assigned roles beyond the topic, and that the room can
+  reach more than one decision over a single continuous conversation —
+  each `readyToDecide` consensus is recorded and the conversation
+  continues, ending only when the room also signals `runComplete`.
+- **Engine**: `checkConsensus`/`handleForcedVoteTurn` operate on the
+  whole run, not a phase; the transcript sent to agents every turn is the
+  full run history (never reset), so nothing is lost across decisions the
+  way it was across phase boundaries. Round-cap/rotation math counts
+  turns since the last `Decision.afterSequenceNumber` instead of since a
+  phase start.
+- **Admin form**: the 5-slot phase fieldset (name/guidance/round-cap/
+  assigns-roles/allows-research per slot) is gone. New Run now asks only
+  for name, topic, participants, budgets, and two mechanical dials
+  ("Rounds before a forced vote", "Allow web search") — no content input
+  beyond the topic itself.
+- **Run viewer**: `PhaseDivider` deleted; the transcript renders as one
+  continuous feed of turns and decision breaks with no phase headers, and
+  the Artifacts section is a flat list instead of grouped by phase.
+
+Verified with tsc, a full `next build`, and a Playwright screenshot of
+the simplified New Run form (Runs → New run) confirming no phase/
+guidance fields remain and the topic field is the only content input.
+
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
 2/4/8/12/16/24/32/40/48px) and duration scale (100/150/200ms) already

@@ -18,15 +18,6 @@ const consensusExtractionSchema = z.object({
     .describe("A clear, one-to-two sentence statement of what the group agreed on, based only on what they actually said."),
 });
 
-const roleAssignmentExtractionSchema = z.object({
-  outcome: z.string().describe("A one-sentence summary of the agreed role structure."),
-  roles: z
-    .array(z.object({ agentRoomLabel: z.string(), role: z.string() }))
-    .describe(
-      "The specific role assigned to each participant, keyed by the room label used in the conversation (e.g. 'Agent B').",
-    ),
-});
-
 const voteTallyExtractionSchema = z.object({
   outcome: z.string().describe("The winning position, stated plainly."),
   dissent: z
@@ -78,18 +69,6 @@ export async function extractConsensusOutcome(
     "You extract what a group of AI agents agreed on from their conversation. Report only what was actually said -- never add, infer, or improve on their decision.",
     `Conversation:\n\n${formatTranscript(transcript)}\n\n---\n\nAll participants signaled they're ready to decide. State what they agreed on.`,
     consensusExtractionSchema,
-  );
-}
-
-export async function extractRoleAssignment(
-  apiKey: string,
-  transcript: TranscriptEntryForPrompt[],
-) {
-  return callExtraction(
-    apiKey,
-    "You extract role assignments a group of AI agents agreed on from their conversation. Report only what was actually said -- never add, infer, or improve on their decision.",
-    `Conversation:\n\n${formatTranscript(transcript)}\n\n---\n\nAll participants signaled they're ready to decide. State the exact role each participant was assigned, keyed by the room label they spoke under (e.g. "Agent B").`,
-    roleAssignmentExtractionSchema,
   );
 }
 

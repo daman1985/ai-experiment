@@ -26,27 +26,23 @@ export function buildSystemPrompt(params: {
   selfRoomLabel: string;
   otherRoomLabels: string[];
   topic: string;
-  phaseName: string;
-  phaseGuidance: string;
   isForcedVote: boolean;
-  roundCapPerPhase: number;
-  priorDecisions: { phaseName: string; outcome: string }[];
+  forcedVoteRoundCap: number;
+  priorDecisions: { outcome: string }[];
 }): string {
   const {
     selfRoomLabel,
     otherRoomLabels,
     topic,
-    phaseName,
-    phaseGuidance,
     isForcedVote,
-    roundCapPerPhase,
+    forcedVoteRoundCap,
     priorDecisions,
   } = params;
 
   const decidedSoFarBlock =
     priorDecisions.length > 0
-      ? `\n\nDecided so far, in earlier phases (treat as settled, not open for re-litigating unless something below explicitly reopens it):\n${priorDecisions
-          .map((d) => `- ${d.phaseName}: ${d.outcome}`)
+      ? `\n\nDecided so far in this conversation (treat as settled, not open for re-litigating unless the room explicitly reopens it):\n${priorDecisions
+          .map((d) => `- ${d.outcome}`)
           .join("\n")}\n`
       : "";
 
@@ -58,8 +54,11 @@ something, say so.
 
 You, ${joinNames(otherRoomLabels)}, are jointly and equally responsible
 for the topic below, entirely on your own authority. No human is
-steering this conversation turn by turn. There is no fixed plan -- you
-decide everything.
+steering this conversation turn by turn. There is no fixed plan, no
+predefined stages, and no admin-assigned structure beyond the topic
+itself -- you decide everything, including whether and how to break
+this into stages, assign roles, or organize a plan. Decide that the
+same way you decide everything else here: by talking it through.
 
 Topic: ${topic}
 ${decidedSoFarBlock}
@@ -89,15 +88,23 @@ Ground rules for how this room works:
   most likely way the current leading approach fails in practice --
   not just because the group sounds aligned. If you can't answer that
   question, you're not ready to decide yet.
+- The room isn't limited to one decision. Each time everyone signals
+  readyToDecide, whatever you've converged on gets locked in as a
+  decision and the conversation continues from there -- you may end up
+  deciding several things in sequence over the course of this
+  conversation, in whatever order and structure makes sense to you.
+  Set runComplete to true (alongside readyToDecide) only when you
+  believe the entire topic is now fully resolved and there's nothing
+  meaningful left to work out -- that ends the room's work for good.
+  Leave it false on every decision before that.
 - If this turn produces something worth keeping as a document -- a draft,
   a plan, or anything else concrete -- fill in the artifact field. Most
   turns won't need one; leave it null when you're just discussing.
-- If the group hasn't reached agreement after ${roundCapPerPhase} rounds,
-  a forced vote happens: majority wins, and dissent is recorded, not
-  hidden. Votes are cast independently -- you won't see how anyone else
-  in this round has voted until after everyone has.
-
-Current phase: ${phaseName}. ${phaseGuidance}
+- If the group hasn't reached agreement after ${forcedVoteRoundCap} rounds
+  since the last decision (or since the start, if there hasn't been one
+  yet), a forced vote happens: majority wins, and dissent is recorded,
+  not hidden. Votes are cast independently -- you won't see how anyone
+  else in this round has voted until after everyone has.
 
 ${isForcedVote ? `This is a forced vote round: the group did not reach
 consensus in time. You must fill in voteChoice with your final position.

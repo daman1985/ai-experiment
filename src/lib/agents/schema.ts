@@ -32,6 +32,11 @@ export const turnOutputSchema = z.object({
   readyToDecide: z
     .boolean()
     .describe("True only if you believe the group has enough to decide now."),
+  runComplete: z
+    .boolean()
+    .describe(
+      "True only if, beyond this specific decision, you believe the entire topic is now fully resolved and there's nothing meaningful left for the room to work out. Checked only once readyToDecide is unanimous. Almost always false -- most decisions are one of several the room reaches over the course of a conversation, not the last one.",
+    ),
   yieldToRoomLabel: z
     .string()
     .nullable()
