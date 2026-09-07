@@ -9,49 +9,82 @@ import { logDiagnostic } from "@/lib/diagnostics";
 import { buildSystemPrompt, buildResearchPrompt, buildTurnPrompt } from "@/lib/agents/prompt";
 import { turnOutputSchema } from "@/lib/agents/schema";
 
-// Every isolated check run so far via /api/diagnose-anthropic used
-// placeholder content (a one-line system prompt, "Say OK") and succeeded
-// in 1-3 seconds -- but the app's real turn/research calls, using the
-// app's actual generated system/research/turn prompts, keep timing out
-// at exactly their configured ceiling regardless of transcript size
-// (confirmed: a 123-char and a 23,592-char turnText both hang for
-// exactly their full timeout). The one thing not yet isolated is the
-// *real* prompt content itself. This runs the exact same
-// buildSystemPrompt/buildResearchPrompt/buildTurnPrompt output a real
-// turn would send -- for an empty, single-agent-room scenario, since
-// content size has already been ruled out as the variable -- against
-// the real configured key and model, and logs the result to
-// DiagnosticEvent so it shows up on this same page without needing curl
-// or a separate secret-gated route.
+// A full diagnostic battery, run in one shot -- built after several
+// rounds of one-variable-at-a-time checks each requiring their own
+// deploy cycle, which was the right instinct (test one thing before
+// guessing the next) but too slow in practice. What's confirmed so far,
+// each independently and repeatedly, directly from this exact
+// production runtime:
+//   - Trivial system prompt ("You are a test.") + web_search tool, OR +
+//     structured-output schema, OR neither: all succeed in 1-3s.
+//   - The app's real system prompt (buildSystemPrompt output, ~5.7-7.3k
+//     chars) + web_search tool, OR + structured-output schema: both hang
+//     for their exact full timeout, every single time, regardless of
+//     how large the surrounding user-message content is (a 123-char and
+//     a 23,592-char turnText both hang identically).
+// Not yet known: whether the real system prompt hangs completely on its
+// own (no tools, no schema); whether it's the prompt's *length* or its
+// *specific content* (never tested a long-but-unrelated prompt as a
+// control); and if content, which half of it. This runs all of those in
+// parallel so one click gives a complete answer instead of another
+// single data point.
 const CHECK_TIMEOUT_MS = 20_000;
 
-async function timedCall<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number): Promise<{ ok: true; elapsedMs: number; value: T } | { ok: false; elapsedMs: number; error: string }> {
+interface CheckOutcome {
+  label: string;
+  ok: boolean;
+  elapsedMs: number;
+  detail: string;
+  promptLength: number;
+}
+
+async function timedCall(
+  label: string,
+  promptLength: number,
+  fn: (signal: AbortSignal) => Promise<string>,
+): Promise<CheckOutcome> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
+  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
   const start = Date.now();
   try {
     const value = await fn(controller.signal);
-    return { ok: true, elapsedMs: Date.now() - start, value };
+    return { label, ok: true, elapsedMs: Date.now() - start, detail: value, promptLength };
   } catch (err) {
+    const elapsedMs = Date.now() - start;
     return {
+      label,
       ok: false,
-      elapsedMs: Date.now() - start,
-      error: controller.signal.aborted
-        ? `timed out after ${ms}ms`
+      elapsedMs,
+      detail: controller.signal.aborted
+        ? `timed out after ${CHECK_TIMEOUT_MS}ms`
         : err instanceof Error
           ? err.message
           : String(err),
+      promptLength,
     };
   } finally {
     clearTimeout(timer);
   }
 }
 
+// Benign, unrelated prose (nothing about autonomy, agents, or
+// decision-making) repeated/truncated to match the real system prompt's
+// length exactly -- a control for length vs. content: if a system
+// prompt this long hangs regardless of what it says, that's a length
+// effect; if only the real content hangs, it's specific to that text.
+function buildFillerOfLength(targetLength: number): string {
+  const paragraph =
+    "The cultivation of tea traces back thousands of years, with early records describing how leaves were harvested by hand and dried under open sky. Over centuries, distinct regions developed their own methods of processing -- some favoring oxidation, others steaming the leaves quickly to preserve a brighter, grassier character. Traders carried these techniques along overland routes and later by sea, and each new region adapted the craft to its own climate and soil. Modern producers still debate the ideal altitude, the best time of day to pick, and how long to let the leaves rest before firing. ";
+  let out = "";
+  while (out.length < targetLength) out += paragraph;
+  return out.slice(0, targetLength);
+}
+
 export async function runRealPromptCheckAction(): Promise<void> {
   const config = await prisma.providerConfig.findUnique({ where: { provider: "ANTHROPIC" } });
   if (!config) {
     await logDiagnostic({
-      source: "diagnose:real-prompt",
+      source: "diagnose:battery",
       level: "error",
       message: "no Anthropic provider config found",
     });
@@ -61,11 +94,9 @@ export async function runRealPromptCheckAction(): Promise<void> {
 
   const apiKey = decrypt({ encrypted: config.encryptedApiKey, iv: config.iv, authTag: config.authTag });
   const client = new Anthropic({ apiKey, maxRetries: 1 });
+  const modelId = config.defaultModelId;
 
-  // Same builders, same shape of inputs a real empty/fresh run's first
-  // turn would produce -- an empty transcript, no prior decisions, not a
-  // forced vote.
-  const systemPrompt = buildSystemPrompt({
+  const realSystemPrompt = buildSystemPrompt({
     selfRoomLabel: "Agent A",
     otherRoomLabels: ["Agent B", "Agent C"],
     topic: "Decide what business to start, then who does what, then run it.",
@@ -74,89 +105,75 @@ export async function runRealPromptCheckAction(): Promise<void> {
     priorDecisions: [],
   });
   const researchPrompt = buildResearchPrompt([], "Agent A");
-  const turnPrompt = buildTurnPrompt({
-    transcript: [],
-    selfRoomLabel: "Agent A",
-    researchNote: null,
-    documents: [],
-  });
+  const turnPrompt = buildTurnPrompt({ transcript: [], selfRoomLabel: "Agent A", researchNote: null, documents: [] });
+  const trivialSystemPrompt = "You are a test.";
+  const half = Math.floor(realSystemPrompt.length / 2);
+  const realFirstHalf = realSystemPrompt.slice(0, half);
+  const realSecondHalf = realSystemPrompt.slice(half);
+  const fillerSameLength = buildFillerOfLength(realSystemPrompt.length);
 
-  const [research, turn, bareWithRealSystem] = await Promise.all([
-    timedCall(
-      (signal) =>
-        client.messages.create(
-          {
-            model: config.defaultModelId,
-            max_tokens: 2000,
-            system: systemPrompt,
-            tools: [
-              { type: "web_search_20260318", name: "web_search", max_uses: 1, allowed_callers: ["direct"] },
-            ],
-            messages: [{ role: "user", content: researchPrompt }],
-          },
+  const webSearchTools = [
+    { type: "web_search_20260318" as const, name: "web_search" as const, max_uses: 1, allowed_callers: ["direct" as const] },
+  ];
+
+  function bareCheck(label: string, system: string) {
+    return timedCall(label, system.length, (signal) =>
+      client.messages
+        .create(
+          { model: modelId, max_tokens: 50, system, messages: [{ role: "user", content: "Reply with just the word OK." }] },
           { timeout: CHECK_TIMEOUT_MS, signal },
-        ),
-      CHECK_TIMEOUT_MS,
-    ),
-    timedCall(
-      (signal) =>
-        client.messages.parse(
-          {
-            model: config.defaultModelId,
-            max_tokens: 2000,
-            system: systemPrompt,
-            output_config: { format: zodOutputFormat(turnOutputSchema) },
-            messages: [{ role: "user", content: turnPrompt }],
-          },
+        )
+        .then((r) => r.content.find((b) => b.type === "text")?.text ?? "(no text)"),
+    );
+  }
+
+  function toolsCheck(label: string, system: string) {
+    return timedCall(label, system.length, (signal) =>
+      client.messages
+        .create(
+          { model: modelId, max_tokens: 50, system, tools: webSearchTools, messages: [{ role: "user", content: "What is 2+2? Do not search, just answer." }] },
           { timeout: CHECK_TIMEOUT_MS, signal },
-        ),
-      CHECK_TIMEOUT_MS,
-    ),
-    // The decisive bisection: the real system prompt, but no tools and
-    // no structured-output schema -- a completely bare completion. If
-    // this ALSO hangs, the system prompt content alone is sufficient to
-    // trigger it, independent of tool-use or structured output. If it
-    // succeeds, the hang requires the real system prompt *combined with*
-    // one of those two features.
-    timedCall(
-      (signal) =>
-        client.messages.create(
-          {
-            model: config.defaultModelId,
-            max_tokens: 50,
-            system: systemPrompt,
-            messages: [{ role: "user", content: "Reply with just the word OK." }],
-          },
+        )
+        .then((r) => r.content.find((b) => b.type === "text")?.text ?? "(no text)"),
+    );
+  }
+
+  const results = await Promise.all([
+    bareCheck("trivial_bare", trivialSystemPrompt),
+    toolsCheck("trivial_tools", trivialSystemPrompt),
+    bareCheck("real_bare", realSystemPrompt),
+    timedCall("real_tools (full research call)", realSystemPrompt.length, (signal) =>
+      client.messages
+        .create(
+          { model: modelId, max_tokens: 2000, system: realSystemPrompt, tools: webSearchTools, messages: [{ role: "user", content: researchPrompt }] },
           { timeout: CHECK_TIMEOUT_MS, signal },
-        ),
-      CHECK_TIMEOUT_MS,
+        )
+        .then(() => "ok"),
     ),
+    timedCall("real_schema (full turn call)", realSystemPrompt.length, (signal) =>
+      client.messages
+        .parse(
+          { model: modelId, max_tokens: 2000, system: realSystemPrompt, output_config: { format: zodOutputFormat(turnOutputSchema) }, messages: [{ role: "user", content: turnPrompt }] },
+          { timeout: CHECK_TIMEOUT_MS, signal },
+        )
+        .then(() => "ok"),
+    ),
+    bareCheck("real_first_half_bare", realFirstHalf),
+    bareCheck("real_second_half_bare", realSecondHalf),
+    bareCheck("filler_same_length_bare", fillerSameLength),
+    toolsCheck("filler_same_length_tools", fillerSameLength),
   ]);
 
-  await logDiagnostic({
-    source: "diagnose:real-prompt",
-    level: research.ok ? "info" : "error",
-    message: research.ok
-      ? `real research prompt succeeded in ${research.elapsedMs}ms`
-      : `real research prompt failed after ${research.elapsedMs}ms: ${research.error}`,
-    detail: { systemPromptLength: systemPrompt.length, researchPromptLength: researchPrompt.length },
-  });
-  await logDiagnostic({
-    source: "diagnose:real-prompt",
-    level: turn.ok ? "info" : "error",
-    message: turn.ok
-      ? `real turn prompt succeeded in ${turn.elapsedMs}ms`
-      : `real turn prompt failed after ${turn.elapsedMs}ms: ${turn.error}`,
-    detail: { systemPromptLength: systemPrompt.length, turnPromptLength: turnPrompt.length },
-  });
-  await logDiagnostic({
-    source: "diagnose:real-prompt",
-    level: bareWithRealSystem.ok ? "info" : "error",
-    message: bareWithRealSystem.ok
-      ? `real system prompt, no tools/schema, succeeded in ${bareWithRealSystem.elapsedMs}ms`
-      : `real system prompt, no tools/schema, failed after ${bareWithRealSystem.elapsedMs}ms: ${bareWithRealSystem.error}`,
-    detail: { systemPromptLength: systemPrompt.length },
-  });
+  for (const r of results) {
+    await logDiagnostic({
+      source: "diagnose:battery",
+      level: r.ok ? "info" : "error",
+      message: r.ok
+        ? `${r.label}: succeeded in ${r.elapsedMs}ms (${r.detail})`
+        : `${r.label}: failed after ${r.elapsedMs}ms: ${r.detail}`,
+      detail: { promptLength: r.promptLength },
+    });
+  }
 
   revalidatePath("/admin/diagnostics");
 }

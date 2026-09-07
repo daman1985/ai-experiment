@@ -4,11 +4,12 @@ import { Button } from "@/components/ui/Button";
 import { runRealPromptCheckAction } from "./actions";
 
 export const dynamic = "force-dynamic";
-// The "run diagnostic call" action below fires two real Anthropic calls
-// in parallel, each with its own 20s abort -- needs more than the
-// platform's default route timeout to avoid the action itself getting
-// killed before either call has a chance to finish or abort cleanly.
-export const maxDuration = 30;
+// The "run diagnostic call" action below fires a full battery of real
+// Anthropic calls in parallel, each with its own 20s abort -- needs more
+// than the platform's default route timeout to avoid the action itself
+// getting killed before every check has a chance to finish or abort
+// cleanly, plus a little more for the sequential logging afterward.
+export const maxDuration = 45;
 
 const MAX_EVENTS = 400;
 
@@ -81,12 +82,13 @@ export default async function DiagnosticsPage({
 
       <form action={runRealPromptCheckAction}>
         <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
-          Run diagnostic call with real prompts
+          Run full diagnostic battery
         </Button>
         <p className="mt-1 text-xs text-text-tertiary">
-          Fires one research call and one turn call against the configured Anthropic key, using the
-          app&apos;s actual system/research/turn prompt text (empty-transcript scenario) -- results
-          appear below in a few seconds once the page reloads.
+          Fires 8 real Anthropic calls in parallel against the configured key -- trivial vs. real
+          system prompt, with/without tools/schema, a length-matched but unrelated control prompt,
+          and each half of the real prompt -- to isolate exactly what's causing the hang in one
+          pass. Takes up to ~20 seconds; results appear below once the page reloads.
         </p>
       </form>
 
