@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/db";
 import { Badge } from "@/components/ui/Badge";
+import { Input } from "@/components/ui/Input";
+import { Button } from "@/components/ui/Button";
 import { SubmitButton } from "@/components/ui/SubmitButton";
+import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
 import { runRealPromptCheckAction, clearDiagnosticsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -62,9 +65,11 @@ export default async function DiagnosticsPage({
       <div>
         <h1 className="font-serif text-2xl text-text-primary">Diagnostics</h1>
         <p className="mt-1 text-sm text-text-secondary">
-          The most recent {events.length} events (newest first), across every run. Written directly
-          by the cron tick, each provider call, and decision extraction -- click inside the box,
-          select all, and copy to share for troubleshooting. Reload the page for newer events.
+          The most recent {events.length} events (newest first, capped at {MAX_EVENTS} -- older
+          events may exist beyond that). Written directly by the cron tick, each provider call,
+          and decision extraction -- select the text below and copy to share for troubleshooting.
+          Updates automatically after either button below finishes; reload manually for events
+          from something else (like a cron tick) that landed since this page loaded.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
           <Badge variant={errorCount > 0 ? "error" : "success"}>
@@ -87,49 +92,53 @@ export default async function DiagnosticsPage({
           </SubmitButton>
         </form>
         <form action={clearDiagnosticsAction}>
-          <SubmitButton variant="danger" className="px-3 py-1 text-xs" pendingText="Clearing...">
+          <ConfirmSubmitButton
+            variant="danger"
+            className="px-3 py-1 text-xs"
+            pendingText="Clearing..."
+            confirmMessage="Clear every recorded diagnostic event? This can't be undone."
+          >
             Clear log
-          </SubmitButton>
+          </ConfirmSubmitButton>
         </form>
       </div>
       <p className="text-xs text-text-tertiary">
         &quot;Run full diagnostic battery&quot; fires several real Anthropic calls in parallel
         against the configured key to isolate exactly what's causing a hang -- takes up to ~20
-        seconds; results appear below once the page reloads. &quot;Clear log&quot; deletes every
-        recorded event so far, so the next run's output isn't mixed in with old ticks/errors --
-        it doesn't affect the app itself, only this log.
+        seconds; results appear below automatically once it finishes. &quot;Clear log&quot;
+        deletes every recorded event so far, so the next run's output isn't mixed in with old
+        ticks/errors -- it doesn't affect the app itself, only this log.
       </p>
 
       <form className="flex flex-wrap gap-2 text-sm" action="/admin/diagnostics">
-        <input
-          type="text"
-          name="runId"
-          defaultValue={runId ?? ""}
-          placeholder="Filter by run id..."
-          className="rounded-sm border border-border bg-surface px-2 py-1 text-xs text-text-primary"
-        />
+        <div className="w-56">
+          <Input
+            type="text"
+            name="runId"
+            defaultValue={runId ?? ""}
+            placeholder="Filter by run id..."
+            aria-label="Filter by run id"
+            className="px-2 py-1 text-xs"
+          />
+        </div>
         <select
           name="level"
           defaultValue={level ?? ""}
-          className="rounded-sm border border-border bg-surface px-2 py-1 text-xs text-text-primary"
+          aria-label="Filter by level"
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
         >
           <option value="">all levels</option>
           <option value="info">info</option>
           <option value="error">error</option>
         </select>
-        <button
-          type="submit"
-          className="rounded-sm border border-border bg-surface px-3 py-1 text-xs text-text-primary hover:bg-surface-hover"
-        >
+        <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
           Filter
-        </button>
+        </Button>
       </form>
 
-      <textarea
-        readOnly
-        defaultValue={events.length === 0 ? "(no events recorded yet)" : text}
-        className="h-[70vh] w-full resize-y rounded-md border border-border bg-surface p-3 font-mono text-xs leading-relaxed text-text-primary"
-      />
+      <pre className="h-[70vh] w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-surface p-3 font-mono text-xs leading-relaxed text-text-primary">
+        {events.length === 0 ? "(no events recorded yet)" : text}
+      </pre>
     </div>
   );
 }

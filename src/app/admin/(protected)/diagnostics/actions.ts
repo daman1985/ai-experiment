@@ -18,12 +18,20 @@ import { turnOutputSchema } from "@/lib/agents/schema";
 // click never reached the server at all (stale page, browser cache) --
 // no need to guess.
 export async function clearDiagnosticsAction(): Promise<void> {
-  const { count } = await prisma.diagnosticEvent.deleteMany({});
-  await logDiagnostic({
-    source: "diagnose:clear",
-    level: "info",
-    message: `cleared ${count} event(s)`,
-  });
+  try {
+    const { count } = await prisma.diagnosticEvent.deleteMany({});
+    await logDiagnostic({
+      source: "diagnose:clear",
+      level: "info",
+      message: `cleared ${count} event(s)`,
+    });
+  } catch (err) {
+    // A DB outage here would otherwise crash this page with Next's
+    // generic error screen -- on a page whose whole purpose is
+    // self-diagnosis without infra access, that's exactly the failure
+    // mode most worth surfacing as a normal log line instead.
+    console.error("[diagnose:clear] failed:", err);
+  }
   revalidatePath("/admin/diagnostics");
 }
 
@@ -99,6 +107,28 @@ function buildFillerOfLength(targetLength: number): string {
 }
 
 export async function runRealPromptCheckAction(): Promise<void> {
+  try {
+    await runBattery();
+  } catch (err) {
+    // Two realistic failures aren't caught by anything inside
+    // runBattery: decrypt() throwing on an auth-tag mismatch (the
+    // ENCRYPTION_KEY env var rotated or mismatched between
+    // environments), and a DB outage on the initial config lookup. Both
+    // would otherwise crash this page with Next's generic error screen
+    // -- on a page whose whole purpose is self-diagnosis without infra
+    // access, those are exactly the failures most worth surfacing as a
+    // normal log line instead of a stack trace nobody without Vercel
+    // access can read.
+    await logDiagnostic({
+      source: "diagnose:battery",
+      level: "error",
+      message: `battery crashed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+  revalidatePath("/admin/diagnostics");
+}
+
+async function runBattery(): Promise<void> {
   const config = await prisma.providerConfig.findUnique({ where: { provider: "ANTHROPIC" } });
   if (!config) {
     await logDiagnostic({
@@ -106,7 +136,6 @@ export async function runRealPromptCheckAction(): Promise<void> {
       level: "error",
       message: "no Anthropic provider config found",
     });
-    revalidatePath("/admin/diagnostics");
     return;
   }
 
@@ -220,6 +249,4 @@ export async function runRealPromptCheckAction(): Promise<void> {
       detail: { promptLength: r.promptLength },
     });
   }
-
-  revalidatePath("/admin/diagnostics");
 }
