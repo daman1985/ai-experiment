@@ -139,16 +139,16 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                   </Button>
                 </form>
               )}
-              {(run.status === "COMPLETED" || run.forcedVotePending) && (
-                <form action={extendRoundsAction}>
-                  <input type="hidden" name="runId" value={run.id} />
-                  <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
-                    {run.status === "COMPLETED"
-                      ? `Reopen — continue ${run.forcedVoteRoundCap} more rounds`
-                      : `Cancel vote — continue ${run.forcedVoteRoundCap} more rounds`}
-                  </Button>
-                </form>
-              )}
+              <form action={extendRoundsAction}>
+                <input type="hidden" name="runId" value={run.id} />
+                <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
+                  {run.status === "COMPLETED"
+                    ? `Reopen — continue ${run.forcedVoteRoundCap} more rounds`
+                    : run.forcedVotePending
+                      ? `Cancel vote — continue ${run.forcedVoteRoundCap} more rounds`
+                      : `Continue ${run.forcedVoteRoundCap} more rounds`}
+                </Button>
+              </form>
             </div>
           )}
           {run.status === "ACTIVE" && (
