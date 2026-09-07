@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { advanceRun, MIN_TURN_BUDGET_MS } from "@/lib/agents/engine";
+import { logDiagnostic } from "@/lib/diagnostics";
 
 // One tick = one turn (or one budget/consensus housekeeping step) for
 // every currently ACTIVE run. Vercel Cron calls this on the schedule in
@@ -55,26 +56,32 @@ export async function GET(request: NextRequest) {
     select: { id: true },
     orderBy: { lastTickAttemptedAt: { sort: "asc", nulls: "first" } },
   });
-  // TEMPORARY: diagnosing repeated 60s timeouts on this route. Every
-  // active run is processed sequentially in one invocation -- if there
-  // are several, or if one call hangs, this is exactly how the whole
-  // tick blows its budget. Timestamps land in Vercel's runtime logs even
-  // if the function is later killed mid-loop, so this pinpoints where.
-  console.log(
-    `[cron/tick] starting, ${activeRuns.length} active run(s): ${activeRuns.map((r) => r.id).join(", ")}`,
-  );
+  await logDiagnostic({
+    source: "cron/tick",
+    level: "info",
+    message: `starting, ${activeRuns.length} active run(s)`,
+    detail: { runIds: activeRuns.map((r) => r.id) },
+  });
 
   const results = [];
   for (const run of activeRuns) {
     const runStart = Date.now();
     if (deadlineAt - runStart < MIN_TURN_BUDGET_MS) {
-      console.log(
-        `[cron/tick] stopping early, not enough of the shared deadline left -- deferring ${run.id} (and any after it) to the next tick`,
-      );
+      await logDiagnostic({
+        source: "cron/tick",
+        level: "info",
+        runId: run.id,
+        message: "stopping early, not enough of the shared deadline left -- deferring to the next tick",
+      });
       results.push({ runId: run.id, action: "deferred" as const, detail: "tick budget exhausted" });
       continue;
     }
-    console.log(`[cron/tick] advancing ${run.id} (+${runStart - tickStart}ms since tick start)`);
+    await logDiagnostic({
+      source: "cron/tick",
+      level: "info",
+      runId: run.id,
+      message: `advancing (+${runStart - tickStart}ms since tick start)`,
+    });
     try {
       // Recorded before the call, not after -- an attempt that throws or
       // times out still counts as "attempted" for fairness-ordering
@@ -82,14 +89,21 @@ export async function GET(request: NextRequest) {
       // branch above) should keep its place at the front of the queue.
       await prisma.run.update({ where: { id: run.id }, data: { lastTickAttemptedAt: new Date() } });
       const result = await advanceRun(run.id, deadlineAt);
-      console.log(
-        `[cron/tick] ${run.id} done in ${Date.now() - runStart}ms: ${JSON.stringify(result)}`,
-      );
+      await logDiagnostic({
+        source: "cron/tick",
+        level: "info",
+        runId: run.id,
+        message: `done in ${Date.now() - runStart}ms`,
+        detail: result,
+      });
       results.push({ runId: run.id, ...result });
     } catch (err) {
-      console.log(
-        `[cron/tick] ${run.id} threw after ${Date.now() - runStart}ms: ${err instanceof Error ? err.stack : String(err)}`,
-      );
+      await logDiagnostic({
+        source: "cron/tick",
+        level: "error",
+        runId: run.id,
+        message: `threw after ${Date.now() - runStart}ms: ${err instanceof Error ? err.message : String(err)}`,
+      });
       results.push({
         runId: run.id,
         action: "error" as const,
@@ -98,6 +112,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  console.log(`[cron/tick] all done in ${Date.now() - tickStart}ms`);
+  await logDiagnostic({
+    source: "cron/tick",
+    level: "info",
+    message: `all done in ${Date.now() - tickStart}ms`,
+  });
   return NextResponse.json({ tickedRuns: results.length, results });
 }

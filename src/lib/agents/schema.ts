@@ -97,6 +97,7 @@ export interface TranscriptEntryForPrompt {
 }
 
 export interface RunTurnInput {
+  runId: string;
   apiKey: string;
   modelId: string;
   systemPrompt: string;

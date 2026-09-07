@@ -9,6 +9,7 @@ import {
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
 import { withTimeout } from "../withTimeout";
+import { logDiagnostic } from "@/lib/diagnostics";
 
 const RESEARCH_MAX_TOKENS = 2000;
 const TURN_MAX_TOKENS = 2000;
@@ -33,6 +34,7 @@ export const anthropicAdapter: ProviderAdapter = {
     const toolCalls: ToolCallLogEntry[] = [];
 
     if (input.enableResearch) {
+      const researchStart = Date.now();
       try {
         const researchResponse = await withTimeout(
           (signal) =>
@@ -101,6 +103,12 @@ export const anthropicAdapter: ProviderAdapter = {
           }
         }
         researchNote = textParts.join("\n").trim() || null;
+        await logDiagnostic({
+          source: "anthropic:research",
+          level: "info",
+          runId: input.runId,
+          message: `succeeded in ${Date.now() - researchStart}ms`,
+        });
       } catch (err) {
         // Research is a best-effort enhancement, not required for the turn
         // to proceed -- a timeout or transient API error here shouldn't
@@ -109,6 +117,12 @@ export const anthropicAdapter: ProviderAdapter = {
         toolCalls.push({
           query: "(research step failed)",
           resultSummary: err instanceof Error ? err.message : String(err),
+        });
+        await logDiagnostic({
+          source: "anthropic:research",
+          level: "error",
+          runId: input.runId,
+          message: `failed after ${Date.now() - researchStart}ms: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
     }
@@ -121,43 +135,62 @@ export const anthropicAdapter: ProviderAdapter = {
     });
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
-    const turnResponse = await withTimeout(
-      (signal) =>
-        client.messages.parse(
-          {
-            model: input.modelId,
-            max_tokens: TURN_MAX_TOKENS,
-            system: input.systemPrompt,
-            output_config: { format: zodOutputFormat(turnOutputSchema) },
-            messages: [
-              {
-                role: "user",
-                content:
-                  imageDocs.length === 0
-                    ? turnText
-                    : [
-                        { type: "text", text: turnText },
-                        ...imageDocs.map((d) => ({
-                          type: "image" as const,
-                          source: {
-                            type: "base64" as const,
-                            media_type: d.mimeType as
-                              | "image/jpeg"
-                              | "image/png"
-                              | "image/gif"
-                              | "image/webp",
-                            data: d.content,
-                          },
-                        })),
-                      ],
-              },
-            ],
-          },
-          { timeout: TURN_TIMEOUT_MS, signal },
-        ),
-      TURN_TIMEOUT_MS,
-      "Anthropic turn call",
-    );
+    const turnStart = Date.now();
+    let turnResponse;
+    try {
+      turnResponse = await withTimeout(
+        (signal) =>
+          client.messages.parse(
+            {
+              model: input.modelId,
+              max_tokens: TURN_MAX_TOKENS,
+              system: input.systemPrompt,
+              output_config: { format: zodOutputFormat(turnOutputSchema) },
+              messages: [
+                {
+                  role: "user",
+                  content:
+                    imageDocs.length === 0
+                      ? turnText
+                      : [
+                          { type: "text", text: turnText },
+                          ...imageDocs.map((d) => ({
+                            type: "image" as const,
+                            source: {
+                              type: "base64" as const,
+                              media_type: d.mimeType as
+                                | "image/jpeg"
+                                | "image/png"
+                                | "image/gif"
+                                | "image/webp",
+                              data: d.content,
+                            },
+                          })),
+                        ],
+                },
+              ],
+            },
+            { timeout: TURN_TIMEOUT_MS, signal },
+          ),
+        TURN_TIMEOUT_MS,
+        "Anthropic turn call",
+      );
+    } catch (err) {
+      await logDiagnostic({
+        source: "anthropic:turn",
+        level: "error",
+        runId: input.runId,
+        message: `failed after ${Date.now() - turnStart}ms: ${err instanceof Error ? err.message : String(err)}`,
+        detail: { systemPromptLength: input.systemPrompt.length, turnTextLength: turnText.length },
+      });
+      throw err;
+    }
+    await logDiagnostic({
+      source: "anthropic:turn",
+      level: "info",
+      runId: input.runId,
+      message: `succeeded in ${Date.now() - turnStart}ms`,
+    });
 
     inputTokens += turnResponse.usage.input_tokens;
     outputTokens += turnResponse.usage.output_tokens;

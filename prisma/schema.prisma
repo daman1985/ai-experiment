@@ -41,6 +41,30 @@ enum AuditVerdict {
   FAIL
 }
 
+// A persisted, in-app-visible operational log -- written directly by the
+// actual code paths being debugged (cron/tick, each provider adapter's
+// research/turn calls, decision extraction), not just console.log'd to
+// Vercel's own runtime logs. The point: whoever is running this app
+// should be able to open one page and copy what it shows, rather than
+// needing someone with Vercel dashboard/API access to go pull logs on
+// their behalf every time something needs checking. See
+// lib/diagnostics.ts for the write path and /admin/diagnostics for the
+// page that reads this.
+model DiagnosticEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  // Where this came from, e.g. "cron/tick", "anthropic:research",
+  // "anthropic:turn", "checkConsensus". Free text, not an enum -- new
+  // call sites shouldn't need a migration to start logging.
+  source  String
+  level   String // "info" | "error"
+  runId   String?
+  message String
+  detail  Json?
+
+  @@index([createdAt])
+}
+
 // Encrypted API keys + default model/budget config, set once via the
 // admin settings page. One row per provider. Keys are AES-256-GCM
 // encrypted with a server-side key (ENCRYPTION_KEY env var) -- never

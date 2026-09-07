@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
+import { logDiagnostic } from "@/lib/diagnostics";
 import { getProviderAdapter, computeCostUsd } from "./index";
 import { buildSystemPrompt, roomLabel } from "./prompt";
 import {
@@ -244,16 +245,15 @@ async function advanceRunLocked(runId: string, deadlineAt: number): Promise<Adva
   const documents = await documentsForAgent(run.id, speaker.id);
 
   const adapter = getProviderAdapter(speaker.provider);
-  // TEMPORARY: diagnosing repeated cron timeouts -- this is the most
-  // likely place a tick actually stalls (a real network call to a
-  // provider, potentially with a live web search). Logged before AND
-  // after so a hang here is visible even if the function gets killed
-  // before the "took Xms" line ever runs.
-  console.log(
-    `[advanceRunLocked] ${run.id}: calling ${speaker.provider} (${speaker.modelId}), research=${enableResearch}, docs=${documents.length}`,
-  );
+  await logDiagnostic({
+    source: "advanceRunLocked",
+    level: "info",
+    runId: run.id,
+    message: `calling ${speaker.provider} (${speaker.modelId}), research=${enableResearch}, docs=${documents.length}`,
+  });
   const llmCallStart = Date.now();
   const result = await adapter.runTurn({
+    runId: run.id,
     apiKey,
     modelId: speaker.modelId,
     systemPrompt,
@@ -264,9 +264,12 @@ async function advanceRunLocked(runId: string, deadlineAt: number): Promise<Adva
     isForcedVote,
     documents,
   });
-  console.log(
-    `[advanceRunLocked] ${run.id}: ${speaker.provider} call took ${Date.now() - llmCallStart}ms`,
-  );
+  await logDiagnostic({
+    source: "advanceRunLocked",
+    level: "info",
+    runId: run.id,
+    message: `${speaker.provider} call took ${Date.now() - llmCallStart}ms`,
+  });
 
   const costUsd = computeCostUsd({
     inputTokens: result.inputTokens,
@@ -287,7 +290,6 @@ async function advanceRunLocked(runId: string, deadlineAt: number): Promise<Adva
   });
   const nextSequenceNumber = (maxSeq._max.sequenceNumber ?? 0) + 1;
 
-  console.log(`[advanceRunLocked] ${run.id}: writing turn #${nextSequenceNumber}`);
   const writeStart = Date.now();
   await prisma.$transaction(async (tx) => {
     const createdTurn = await tx.turn.create({
@@ -341,7 +343,12 @@ async function advanceRunLocked(runId: string, deadlineAt: number): Promise<Adva
       },
     });
   });
-  console.log(`[advanceRunLocked] ${run.id}: turn write took ${Date.now() - writeStart}ms`);
+  await logDiagnostic({
+    source: "advanceRunLocked",
+    level: "info",
+    runId: run.id,
+    message: `turn #${nextSequenceNumber} written in ${Date.now() - writeStart}ms`,
+  });
 
   const updatedSpeaker = await prisma.agent.findUniqueOrThrow({ where: { id: speaker.id } });
   if (Number(updatedSpeaker.spendUsd) >= Number(updatedSpeaker.budgetCapUsd)) {
@@ -423,7 +430,12 @@ async function checkConsensus(
   if (!allReady) return null;
 
   if (deadlineAt - Date.now() < MIN_EXTRACTION_BUDGET_MS) {
-    console.log(`[checkConsensus] ${run.id}: consensus reached but budget too tight for extraction this tick -- deferring`);
+    await logDiagnostic({
+      source: "checkConsensus",
+      level: "info",
+      runId: run.id,
+      message: "consensus reached but budget too tight for extraction this tick -- deferring",
+    });
     return {
       action: "turn_taken",
       detail: "Consensus reached; outcome extraction deferred to the next tick (budget tight).",
@@ -440,14 +452,23 @@ async function checkConsensus(
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
   const transcript = await fullTranscript(run.id);
 
-  console.log(`[checkConsensus] ${run.id}: extracting consensus outcome`);
   let t0 = Date.now();
   const extraction = await extractConsensusOutcome(anthropicKey, transcript);
-  console.log(`[checkConsensus] ${run.id}: outcome extraction took ${Date.now() - t0}ms`);
+  await logDiagnostic({
+    source: "checkConsensus",
+    level: "info",
+    runId: run.id,
+    message: `outcome extraction took ${Date.now() - t0}ms`,
+  });
   await recordSystemCost(run.id, extraction, anthropicConfig);
   t0 = Date.now();
   const rootCause = await extractRootCauseCheck(anthropicKey, transcript, extraction.result.outcome);
-  console.log(`[checkConsensus] ${run.id}: root-cause extraction took ${Date.now() - t0}ms`);
+  await logDiagnostic({
+    source: "checkConsensus",
+    level: "info",
+    runId: run.id,
+    message: `root-cause extraction took ${Date.now() - t0}ms`,
+  });
   await recordSystemCost(run.id, rootCause, anthropicConfig);
 
   const maxSeq = await prisma.turn.aggregate({
@@ -511,7 +532,12 @@ async function handleForcedVoteTurn(
   }
 
   if (deadlineAt - Date.now() < MIN_EXTRACTION_BUDGET_MS) {
-    console.log(`[handleForcedVoteTurn] ${run.id}: all votes in but budget too tight for extraction this tick -- deferring`);
+    await logDiagnostic({
+      source: "handleForcedVoteTurn",
+      level: "info",
+      runId: run.id,
+      message: "all votes in but budget too tight for extraction this tick -- deferring",
+    });
     return {
       action: "turn_taken",
       detail: "All votes are in; tally extraction deferred to the next tick (budget tight).",
@@ -527,16 +553,25 @@ async function handleForcedVoteTurn(
   }
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
   const votes = Array.from(latestVoteByAgent.values());
-  console.log(`[handleForcedVoteTurn] ${run.id}: tallying votes`);
   let t0 = Date.now();
   const tally = await extractVoteTally(anthropicKey, votes);
-  console.log(`[handleForcedVoteTurn] ${run.id}: tally took ${Date.now() - t0}ms`);
+  await logDiagnostic({
+    source: "handleForcedVoteTurn",
+    level: "info",
+    runId: run.id,
+    message: `tally took ${Date.now() - t0}ms`,
+  });
   await recordSystemCost(run.id, tally, anthropicConfig);
 
   const transcript = await fullTranscript(run.id);
   t0 = Date.now();
   const rootCause = await extractRootCauseCheck(anthropicKey, transcript, tally.result.outcome);
-  console.log(`[handleForcedVoteTurn] ${run.id}: root-cause extraction took ${Date.now() - t0}ms`);
+  await logDiagnostic({
+    source: "handleForcedVoteTurn",
+    level: "info",
+    runId: run.id,
+    message: `root-cause extraction took ${Date.now() - t0}ms`,
+  });
   await recordSystemCost(run.id, rootCause, anthropicConfig);
 
   const maxSeq = await prisma.turn.aggregate({

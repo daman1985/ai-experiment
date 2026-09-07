@@ -16,6 +16,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           >
             Settings
           </Link>
+          <Link
+            href="/admin/diagnostics"
+            className="text-text-secondary transition-colors hover:text-text-primary"
+          >
+            Diagnostics
+          </Link>
           <Link href="/" className="text-text-tertiary transition-colors hover:text-text-primary">
             View public log
           </Link>

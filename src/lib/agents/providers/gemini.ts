@@ -8,6 +8,7 @@ import type {
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
 import { withTimeout } from "../withTimeout";
+import { logDiagnostic } from "@/lib/diagnostics";
 
 // Hand-written to match turnOutputSchema in ../schema.ts (kept in sync
 // manually -- Gemini's structured-output schema is the OpenAPI-subset
@@ -89,6 +90,7 @@ export const geminiAdapter: ProviderAdapter = {
     const toolCalls: ToolCallLogEntry[] = [];
 
     if (input.enableResearch) {
+      const researchStart = Date.now();
       try {
         const researchResponse = await withTimeout(
           (signal) =>
@@ -125,11 +127,23 @@ export const geminiAdapter: ProviderAdapter = {
         for (const query of queries) {
           toolCalls.push({ query, resultSummary: chunkSummary });
         }
+        await logDiagnostic({
+          source: "gemini:research",
+          level: "info",
+          runId: input.runId,
+          message: `succeeded in ${Date.now() - researchStart}ms`,
+        });
       } catch (err) {
         researchNote = null;
         toolCalls.push({
           query: "(research step failed)",
           resultSummary: err instanceof Error ? err.message : String(err),
+        });
+        await logDiagnostic({
+          source: "gemini:research",
+          level: "error",
+          runId: input.runId,
+          message: `failed after ${Date.now() - researchStart}ms: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
     }
@@ -142,35 +156,53 @@ export const geminiAdapter: ProviderAdapter = {
     });
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
-    const turnResponse = await withTimeout(
-      (signal) =>
-        ai.models.generateContent({
-          model: input.modelId,
-          contents:
-            imageDocs.length === 0
-              ? turnText
-              : [
-                  {
-                    role: "user",
-                    parts: [
-                      { text: turnText },
-                      ...imageDocs.map((d) => ({
-                        inlineData: { mimeType: d.mimeType, data: d.content },
-                      })),
-                    ],
-                  },
-                ],
-          config: {
-            systemInstruction: input.systemPrompt,
-            responseMimeType: "application/json",
-            responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
-            httpOptions: { timeout: TURN_TIMEOUT_MS },
-            abortSignal: signal,
-          },
-        }),
-      TURN_TIMEOUT_MS,
-      "Gemini turn call",
-    );
+    const turnStart = Date.now();
+    let turnResponse;
+    try {
+      turnResponse = await withTimeout(
+        (signal) =>
+          ai.models.generateContent({
+            model: input.modelId,
+            contents:
+              imageDocs.length === 0
+                ? turnText
+                : [
+                    {
+                      role: "user",
+                      parts: [
+                        { text: turnText },
+                        ...imageDocs.map((d) => ({
+                          inlineData: { mimeType: d.mimeType, data: d.content },
+                        })),
+                      ],
+                    },
+                  ],
+            config: {
+              systemInstruction: input.systemPrompt,
+              responseMimeType: "application/json",
+              responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
+              httpOptions: { timeout: TURN_TIMEOUT_MS },
+              abortSignal: signal,
+            },
+          }),
+        TURN_TIMEOUT_MS,
+        "Gemini turn call",
+      );
+    } catch (err) {
+      await logDiagnostic({
+        source: "gemini:turn",
+        level: "error",
+        runId: input.runId,
+        message: `failed after ${Date.now() - turnStart}ms: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      throw err;
+    }
+    await logDiagnostic({
+      source: "gemini:turn",
+      level: "info",
+      runId: input.runId,
+      message: `succeeded in ${Date.now() - turnStart}ms`,
+    });
 
     inputTokens += turnResponse.usageMetadata?.promptTokenCount ?? 0;
     outputTokens += turnResponse.usageMetadata?.candidatesTokenCount ?? 0;
