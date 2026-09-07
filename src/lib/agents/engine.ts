@@ -218,6 +218,15 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
   const documents = await documentsForAgent(run.id, speaker.id);
 
   const adapter = getProviderAdapter(speaker.provider);
+  // TEMPORARY: diagnosing repeated cron timeouts -- this is the most
+  // likely place a tick actually stalls (a real network call to a
+  // provider, potentially with a live web search). Logged before AND
+  // after so a hang here is visible even if the function gets killed
+  // before the "took Xms" line ever runs.
+  console.log(
+    `[advanceRunLocked] ${run.id}: calling ${speaker.provider} (${speaker.modelId}), research=${enableResearch}, docs=${documents.length}`,
+  );
+  const llmCallStart = Date.now();
   const result = await adapter.runTurn({
     apiKey,
     modelId: speaker.modelId,
@@ -229,6 +238,9 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
     isForcedVote,
     documents,
   });
+  console.log(
+    `[advanceRunLocked] ${run.id}: ${speaker.provider} call took ${Date.now() - llmCallStart}ms`,
+  );
 
   const costUsd = computeCostUsd({
     inputTokens: result.inputTokens,
@@ -249,6 +261,8 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
   });
   const nextSequenceNumber = (maxSeq._max.sequenceNumber ?? 0) + 1;
 
+  console.log(`[advanceRunLocked] ${run.id}: writing turn #${nextSequenceNumber}`);
+  const writeStart = Date.now();
   await prisma.$transaction(async (tx) => {
     const createdTurn = await tx.turn.create({
       data: {
@@ -301,6 +315,7 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
       },
     });
   });
+  console.log(`[advanceRunLocked] ${run.id}: turn write took ${Date.now() - writeStart}ms`);
 
   const updatedSpeaker = await prisma.agent.findUniqueOrThrow({ where: { id: speaker.id } });
   if (Number(updatedSpeaker.spendUsd) >= Number(updatedSpeaker.budgetCapUsd)) {
@@ -390,9 +405,14 @@ async function checkConsensus(
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
   const transcript = await fullTranscript(run.id);
 
+  console.log(`[checkConsensus] ${run.id}: extracting consensus outcome`);
+  let t0 = Date.now();
   const extraction = await extractConsensusOutcome(anthropicKey, transcript);
+  console.log(`[checkConsensus] ${run.id}: outcome extraction took ${Date.now() - t0}ms`);
   await recordSystemCost(run.id, extraction, anthropicConfig);
+  t0 = Date.now();
   const rootCause = await extractRootCauseCheck(anthropicKey, transcript, extraction.result.outcome);
+  console.log(`[checkConsensus] ${run.id}: root-cause extraction took ${Date.now() - t0}ms`);
   await recordSystemCost(run.id, rootCause, anthropicConfig);
 
   const maxSeq = await prisma.turn.aggregate({
@@ -463,11 +483,16 @@ async function handleForcedVoteTurn(
   }
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
   const votes = Array.from(latestVoteByAgent.values());
+  console.log(`[handleForcedVoteTurn] ${run.id}: tallying votes`);
+  let t0 = Date.now();
   const tally = await extractVoteTally(anthropicKey, votes);
+  console.log(`[handleForcedVoteTurn] ${run.id}: tally took ${Date.now() - t0}ms`);
   await recordSystemCost(run.id, tally, anthropicConfig);
 
   const transcript = await fullTranscript(run.id);
+  t0 = Date.now();
   const rootCause = await extractRootCauseCheck(anthropicKey, transcript, tally.result.outcome);
+  console.log(`[handleForcedVoteTurn] ${run.id}: root-cause extraction took ${Date.now() - t0}ms`);
   await recordSystemCost(run.id, rootCause, anthropicConfig);
 
   const maxSeq = await prisma.turn.aggregate({
