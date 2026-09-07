@@ -162,6 +162,28 @@ export async function runRealPromptCheckAction(): Promise<void> {
     bareCheck("real_second_half_bare", realSecondHalf),
     bareCheck("filler_same_length_bare", fillerSameLength),
     toolsCheck("filler_same_length_tools", fillerSameLength),
+    // The real system prompt alone succeeded, and a length-matched
+    // unrelated filler + tools succeeded -- so it's not the system
+    // prompt's length or content alone. These two isolate the remaining
+    // question: does the real system prompt need to be paired with the
+    // *real* accompanying message (which actually asks the model to use
+    // the tool, or gives it real conversational content to react to), or
+    // does it hang with tools/schema regardless of what the message says?
+    toolsCheck("real_system_tools_trivial_message", realSystemPrompt),
+    timedCall("real_system_schema_trivial_message", realSystemPrompt.length, (signal) =>
+      client.messages
+        .parse(
+          {
+            model: modelId,
+            max_tokens: 50,
+            system: realSystemPrompt,
+            output_config: { format: zodOutputFormat(turnOutputSchema) },
+            messages: [{ role: "user", content: "Reply with a minimal valid turn: any message, any weaknessCritique, confidence 0.5, readyToDecide false." }],
+          },
+          { timeout: CHECK_TIMEOUT_MS, signal },
+        )
+        .then(() => "ok"),
+    ),
   ]);
 
   for (const r of results) {
