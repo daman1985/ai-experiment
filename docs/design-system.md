@@ -1,0 +1,245 @@
+# Design system reference — AI Co-Founders Experiment
+
+This is the standing source of truth for the app's visual and interaction
+design. It exists so design decisions stay consistent from the first
+component to the last, across sessions, without re-deriving everything
+from scratch each time. The `ui-ux-designer` subagent (see
+`.claude/agents/ui-ux-designer.md`) owns keeping this file current.
+
+## What this app actually is
+
+Three AI agents (currently Claude, GPT, Gemini — the roster is
+provider-configurable, see `src/lib/agents/providerRegistry.ts`) take
+turns in a round-robin discussion, deciding what business to start, then
+who does what, then running it. A human admin watches. Current screens:
+
+- **Login** (`/admin/login`) — single shared password.
+- **Dashboard** (`/admin`) — list of runs, a form to create one (pick
+  which providers join, budgets, round cap).
+- **Settings** (`/admin/settings`) — one form per configured provider
+  (API key, model ID, pricing).
+- **Run viewer** (`/runs/[id]`) — the actual product: a header (status,
+  phase, per-agent spend), a Decisions section, a collapsible Artifacts
+  section, and the **Transcript** — a chronological feed of turns, each
+  with a speaker, a message, a mandatory stated self-critique, and
+  status badges (ready-to-decide / vote / yield).
+
+The transcript is the core of the product. Nothing else in this app has
+a real precedent in any reference product we've studied — a
+multi-speaker AI conversation with a mandatory self-critique field,
+votes, yields, and agent-produced documents doesn't exist in Linear,
+Attio, Mercury, or Granola. Treat every other screen (dashboard,
+settings) as a supporting cast to that one.
+
+Stack: Next.js 16 (App Router), Tailwind v4 (CSS-first `@theme` config
+in `src/app/globals.css`, not a `tailwind.config.js`), TypeScript,
+deployed on Vercel.
+
+Current state as of this doc: dark theme (`neutral-900`/`neutral-950`),
+no token system, ad hoc Tailwind utility classes per component,
+symmetric card grids. The admin (Daman) has explicitly said this reads
+as generic/AI-generated and wants a light theme with real personality.
+
+## Source quality — what to trust and what to discount
+
+Three research passes fed this doc: a personal research vault (a
+different, MCP-host-embedded product's research, only partially
+applicable — see below), and two independently-run "deep research"
+reports (referred to here as **Report G** and **Report O**), plus direct
+visual inspection of two real products.
+
+**Trust these at face value:**
+- Direct visual inspection of Mercury's live public demo
+  (`https://demo.mercury.com/`) — we looked at it ourselves, screenshot
+  in hand. This is the single most reliable piece of evidence in this
+  doc because it's the actual product, not a description of one.
+- Report G's citations that point to a product's own first-party
+  documentation/blog (Linear's own redesign post, Attio's own help
+  docs, Mercury's own blog) — Report G consistently separates its own
+  synthesis from sourced claims, which is a meaningful quality signal.
+- The convergence itself: where the vault research, Report G, and
+  Report O all independently landed on the same conclusion (see
+  "Converged principles" below), treat that as strong evidence
+  regardless of any one source's individual reliability.
+
+**Discount or verify before relying on:**
+- Report O's specific numeric claims about Linear (exact hex `#5e6ad2`,
+  background `#08090a`, font weight exactly `510`, OpenType features
+  `cv01`/`ss03`) — traced to `github.com/soulcore-dev/soul-design-md`,
+  which is a third party's *reverse-engineered guess* at Linear's design
+  system, not Linear's own documentation. Treat these numbers as
+  "plausible inspiration," never as fact to cite or replicate exactly.
+- Report O's Attio citations — Dribbble shots by an outside designer
+  ("Julian Herbst"), not confirmed shipped product. Dribbble is
+  routinely full of unsolicited concept redesigns for real companies.
+- We inspected Linear's own redesign blog post directly and found it's
+  dark-themed end to end (the blog chrome and every embedded product
+  screenshot). This confirms Report G's own caveat: **Linear is a
+  reference for structural/interaction discipline only — chrome
+  hierarchy, panels, density — never for color or visual mood.** We have
+  no direct visual evidence of what Linear's light mode (if any) looks
+  like.
+- Anything from the personal research vault tagged as belonging to the
+  unrelated "Who App" (an MCP-host-embedded people-finder) — its
+  sandboxed-iframe/`sendMessage`/host-reasoning-rendering material is
+  for a fundamentally different architecture (an app embedded inside
+  Claude/ChatGPT's own UI) and does not apply to this conventional
+  server-rendered Next.js app.
+
+## The mechanism-vs-skin split (read this before making any decision)
+
+This is the most important operating principle in this document, and it
+exists because of a real risk that was caught mid-conversation: treating
+"the best real example we found" (Mercury) as a template to reskin,
+rather than as proof that certain *mechanisms* work.
+
+**Borrowed as craft, not style — settled, build these without asking:**
+These converged across all sources (vault research + Report G + Report O
++ direct Mercury inspection) and have nothing to do with any one
+product's brand. They're closer to "how good software is built" than to
+anyone's visual identity.
+
+- A real token substrate (spacing/color/type/elevation) before any
+  component — no hardcoded px or hex in component code.
+- One accent color, used for interactive/actionable signals only —
+  never for static text, decorative borders, or more than one thing
+  competing for attention on a screen at once.
+- `font-variant-numeric: tabular-nums` on every numeric display (spend
+  figures, budgets, timestamps, token counts).
+- Status conveyed redundantly — icon + muted background + text label
+  together, never color alone (this is also a WCAG requirement, not
+  just a taste preference).
+- Borders over shadows for ordinary separation; shadows reserved for
+  things that actually float above other content (menus, dialogs,
+  popovers).
+- Cards/rows in the same visual row do not need identical internal
+  anatomy — in fact they read better when they aren't identical
+  (Mercury's Credit Card / Bill Pay / Invoicing row is the concrete
+  proof: three different internal layouts, one shared container style).
+- A squint-test budget: roughly ≤6 distinct visual objects above the
+  fold, ≤2 chromatic colors per screen beyond the neutral scale, don't
+  repeat an identical chrome pattern more than ~3 times before breaking
+  it.
+- Progressive disclosure for secondary information/settings — advanced
+  options behind a disclosure, not all visible at once.
+- Motion as feedback, not decoration: 80–250ms, ease-out, restricted to
+  `opacity`/`transform`, honoring `prefers-reduced-motion`. Never
+  persistent/looping motion on a steady-state element (e.g. a
+  perpetually pulsing "running" badge becomes noise, not signal).
+- Accessibility basics: WCAG AA contrast, `:focus-visible` rings on
+  every interactive element, `aria-live="polite"` (never `assertive`)
+  for feed updates, batched/throttled rather than announcing every
+  token, real keyboard navigation (see below).
+- The transcript is a continuous aligned reading surface (fixed left
+  edge, consistent column positions for time/speaker/message/status),
+  not chat bubbles. An administrator reading for a long session needs
+  their eye to return to the same horizontal position every time — chat
+  bubbles fail this by design.
+- Live-feed behavior: append-only, never reorder history, never steal
+  the viewport from someone scrolled up reading backlog — show an
+  anchored "N new — jump to live" control instead.
+
+**Ours to invent — do not decide unilaterally, bring to the admin first:**
+Nothing in any reference product actually has these, because nothing we
+studied has this app's content. This is where the app's actual
+personality lives, and it needs a human decision, not a best-guess.
+
+- The accent color itself (not blue-because-Mercury-is-blue — pick
+  something because it's right for this product).
+- The specific typeface pairing.
+- How the three (or N) agents get visually distinguished from each
+  other — the color-per-provider system, and whether/how any non-color
+  identity mark is used (never their real corporate logos — invent our
+  own simple marks).
+- How the mandatory weakness-critique field is visually treated —
+  this has no precedent anywhere; it's the single most distinctive
+  piece of content in the app and deserves a considered, specific
+  treatment, not a generic "secondary text, muted color" default.
+- How a consensus or forced-vote moment is presented when it resolves —
+  this is a narratively significant event (three AI systems reaching or
+  failing to reach agreement) and a generic status-changed-to-resolved
+  treatment would undersell it.
+- How an agent-produced artifact (a business plan draft, a landing page
+  draft) surfaces in the feed.
+- Any "signature" personality motif for the product as a whole.
+
+## Engineering specs (safe to build against directly)
+
+**Spacing.** 4px sub-grid, 8px common rhythm:
+`2 / 4 / 8 / 12 / 16 / 24 / 32 / 40 / 48`.
+
+**Type scale** (exact typeface TBD — see "ours to invent" — but the
+scale/rhythm below is settled):
+
+| Element | Size | Line-height | Weight |
+|---|---:|---:|---:|
+| Transcript body | 15px | 1.5–1.6 | 400 |
+| Speaker name | 13–14px | 1.35 | 500–600 |
+| Controls | 13–14px | 1.3 | 500 |
+| Metadata | 12–12.5px | 1.35 | 400–500 |
+| Screen title | 20–22px | 1.25 | 600 |
+| Dashboard stat | 24–28px | 1.15 | 600 |
+
+Monospace only for genuinely technical identifiers (model IDs, raw tool
+call arguments) — never for all metadata just because this is an AI
+tool.
+
+**Radius discipline** (avoid uniform-8px-everywhere):
+
+```
+ordinary controls      6px
+badges                  5–6px, or pill only where semantically apt
+popover/menu            8–10px
+dialog                  10–12px
+transcript row          0px (continuous surface, not cards)
+major dashboard panel   8px
+```
+
+**Motion tokens:**
+
+```
+hover/focus              80–120ms
+badge/state transition   120–160ms
+popover                  120–160ms
+inspector/drawer         160–220ms
+new live event           ~120ms, opacity+translateY(2px)→0, only while following live
+```
+
+**Layout.** Transcript column width constrained to a comfortable reading
+measure (~65–75 characters, roughly 640–720px), not full-bleed on a wide
+monitor — expand whitespace or reveal a metadata inspector instead of
+stretching the reading column.
+
+**Long-transcript performance/accessibility** (relevant once a run has
+many turns): virtualize the list once it's long, but if you do, you must
+add `aria-setsize`/`aria-posinset` on rendered rows so screen readers
+still understand the true document length — a naive virtualized list
+tells a screen-reader user the transcript is only as long as what's
+currently mounted. Use a roving `tabindex` (one row is `0`, the rest
+`-1`) rather than making every row individually tab-stoppable.
+
+## Explicit rejections (both reports and the vault agree — do not import)
+
+WebGL/3D/shader backgrounds, glassmorphism/heavy blur on reading
+surfaces, kinetic/morphing typography, spring/bounce motion physics,
+decorative bento grids for the transcript, custom cursors, scroll-jacking
+or parallax (scroll position is semantically meaningful here — it's your
+place in the chronology, never repurpose it as an animation trigger),
+animated gradient/mesh backgrounds, a card for every single message.
+These aren't just "currently unfashionable" — both deep-research reports
+independently flagged them as actively harmful to a dense, long-session
+reading tool regardless of trend cycles.
+
+## Working process for this subagent
+
+1. When asked to plan or build anything UI-related, check the relevant
+   section of this doc first.
+2. Never unilaterally decide anything in the "ours to invent" list —
+   surface it as an explicit question back to the main session/admin.
+3. When a new decision gets made (an "ours to invent" item gets
+   resolved, or a new pattern gets adopted), update this file in the
+   same piece of work — this doc drifting out of date is a failure mode
+   to actively avoid.
+4. Flag drift: if a new component is about to break an already-settled
+   pattern (a new symmetric card grid, a new shadow-heavy treatment,
+   inconsistent radius), say so before building it, not after.
