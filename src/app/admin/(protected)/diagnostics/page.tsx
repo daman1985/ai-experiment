@@ -1,7 +1,14 @@
 import { prisma } from "@/lib/db";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { runRealPromptCheckAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+// The "run diagnostic call" action below fires two real Anthropic calls
+// in parallel, each with its own 20s abort -- needs more than the
+// platform's default route timeout to avoid the action itself getting
+// killed before either call has a chance to finish or abort cleanly.
+export const maxDuration = 30;
 
 const MAX_EVENTS = 400;
 
@@ -71,6 +78,17 @@ export default async function DiagnosticsPage({
           )}
         </div>
       </div>
+
+      <form action={runRealPromptCheckAction}>
+        <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
+          Run diagnostic call with real prompts
+        </Button>
+        <p className="mt-1 text-xs text-text-tertiary">
+          Fires one research call and one turn call against the configured Anthropic key, using the
+          app&apos;s actual system/research/turn prompt text (empty-transcript scenario) -- results
+          appear below in a few seconds once the page reloads.
+        </p>
+      </form>
 
       <form className="flex flex-wrap gap-2 text-sm" action="/admin/diagnostics">
         <input
