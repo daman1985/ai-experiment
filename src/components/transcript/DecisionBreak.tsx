@@ -54,6 +54,11 @@ export function DecisionBreak({
       <p className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-text-primary">
         {decision.outcome}
       </p>
+      <div className="mt-3 border-l-2 border-border pl-3 text-sm italic leading-snug text-text-secondary">
+        <span className="not-italic font-medium text-text-primary">Untested: </span>
+        {decision.untestedAssumption} <span className="not-italic font-medium text-text-primary">If wrong: </span>
+        {decision.likelyFailureMode}
+      </div>
       {dissent.length > 0 && (
         <div className="mt-3 space-y-1 border-l-2 border-border pl-3">
           <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">

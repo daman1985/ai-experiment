@@ -234,6 +234,18 @@ model Decision {
   outcome String // e.g. the chosen approach, or the full role assignment
   method    DecisionMethod
   dissent   Json? // { agentId: string, reason: string }[] when not unanimous
+
+  // Automated pre-mortem, extracted once when the decision resolves --
+  // a structural analog to an "enhancing cognition"-style re-evaluation
+  // gate (name the load-bearing assumption, name the failure mode) run
+  // once over the finished decision rather than added as another
+  // per-turn field, so it can't become another box a weak model
+  // perfunctorily checks. Admin-facing only -- never replayed back into
+  // the agents' own prompt context, same reasoning as the confidence
+  // fields on Turn.
+  untestedAssumption String
+  likelyFailureMode  String
+
   decidedAt DateTime       @default(now())
 }
 

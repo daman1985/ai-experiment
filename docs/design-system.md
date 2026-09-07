@@ -460,6 +460,41 @@ display, and the artifact backlink all render correctly against real
 real provider key, since none are configured yet — that's the next real
 test once the admin adds keys.
 
+**Root-cause/pre-mortem reasoning pass done** — an "enhancing cognition"
+style upgrade, requested directly by the admin: make the room's
+discussions genuinely thorough rather than surface-level, without
+falling into the trap of just adding another required per-turn JSON
+field that a weak model could perfunctorily check. Two changes, at two
+different layers:
+
+- **Prompt layer** (`buildSystemPrompt`): the existing weakness-critique
+  rule now explicitly asks agents to name the actual underlying need a
+  proposal is supposed to solve, separate from the proposal's specific
+  execution, before treating it as strong — not just find a surface
+  nitpick. The `readyToDecide` gate now requires surviving a pre-mortem
+  ("the single most likely way this fails in practice") before an agent
+  is allowed to signal it's ready, mirroring the re-evaluation gate's
+  "name the failure mode before finalizing" step.
+- **Decision layer** (new, not prompt-only): a fourth extraction call —
+  `extractRootCauseCheck` in `decisionExtraction.ts`, same cheap
+  Claude Haiku tier as the existing consensus/role/vote extractions —
+  runs once whenever a Decision is created (consensus or forced vote),
+  reading the finished conversation as a skeptical outside reviewer and
+  naming the single most significant untested assumption plus its most
+  likely failure mode. Stored on `Decision.untestedAssumption` /
+  `likelyFailureMode`, rendered in `DecisionBreak` right under the
+  outcome. Deliberately admin-facing only, never replayed back into the
+  agents' own prompt context — same reasoning as the confidence fields,
+  so it can't become something an agent games or pre-empts. This is the
+  layer that actually mirrors enhancing-cognition's structure (a gate
+  applied once, at the moment something gets finalized) rather than
+  diluting the per-turn schema further.
+
+Verified with tsc, a full build, and a synthetic Run/Phase/Agent/
+Decision inserted via psql (no real provider call, since this is pure
+schema/rendering verification) — confirmed the "Untested: ... If
+wrong: ..." annotation renders correctly under a decision break.
+
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
 2/4/8/12/16/24/32/40/48px) and duration scale (100/150/200ms) already

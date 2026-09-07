@@ -5,6 +5,7 @@ import { buildSystemPrompt, roomLabel } from "./prompt";
 import {
   extractConsensusOutcome,
   extractRoleAssignment,
+  extractRootCauseCheck,
   extractVoteTally,
 } from "./decisionExtraction";
 import type { TranscriptEntryForPrompt } from "./schema";
@@ -304,8 +305,17 @@ async function checkConsensus(
   if (phase.assignsRoles) {
     const extraction = await extractRoleAssignment(anthropicKey, transcript);
     await recordSystemCost(runId, extraction, anthropicConfig);
+    const rootCause = await extractRootCauseCheck(anthropicKey, transcript, extraction.result.outcome);
+    await recordSystemCost(runId, rootCause, anthropicConfig);
     await prisma.decision.create({
-      data: { runId, phaseId: phase.id, outcome: extraction.result.outcome, method: "CONSENSUS" },
+      data: {
+        runId,
+        phaseId: phase.id,
+        outcome: extraction.result.outcome,
+        method: "CONSENSUS",
+        untestedAssumption: rootCause.result.untestedAssumption,
+        likelyFailureMode: rootCause.result.likelyFailureMode,
+      },
     });
     for (const roleAssignment of extraction.result.roles) {
       const agent = activeAgents.find(
@@ -324,8 +334,17 @@ async function checkConsensus(
 
   const extraction = await extractConsensusOutcome(anthropicKey, transcript);
   await recordSystemCost(runId, extraction, anthropicConfig);
+  const rootCause = await extractRootCauseCheck(anthropicKey, transcript, extraction.result.outcome);
+  await recordSystemCost(runId, rootCause, anthropicConfig);
   await prisma.decision.create({
-    data: { runId, phaseId: phase.id, outcome: extraction.result.outcome, method: "CONSENSUS" },
+    data: {
+      runId,
+      phaseId: phase.id,
+      outcome: extraction.result.outcome,
+      method: "CONSENSUS",
+      untestedAssumption: rootCause.result.untestedAssumption,
+      likelyFailureMode: rootCause.result.likelyFailureMode,
+    },
   });
   await advanceToNextPhase(runId, phase);
   return { action: "phase_resolved", detail: `${phase.name} resolved by consensus.` };
@@ -373,6 +392,23 @@ async function handleForcedVoteTurn(
   const tally = await extractVoteTally(anthropicKey, votes);
   await recordSystemCost(runId, tally, anthropicConfig);
 
+  const priorTurns = await prisma.turn.findMany({
+    where: { phaseId: phase.id },
+    orderBy: { sequenceNumber: "asc" },
+    include: { agent: true, yieldToAgent: true },
+  });
+  const transcript: TranscriptEntryForPrompt[] = priorTurns.map((t) => ({
+    speakerRoomLabel: roomLabel(t.agent.seatIndex),
+    message: t.message,
+    weaknessCritique: t.weaknessCritique,
+    readyToDecide: t.readyToDecide,
+    yieldToRoomLabel: t.yieldToAgent ? roomLabel(t.yieldToAgent.seatIndex) : null,
+    isVote: t.isVote,
+    voteChoice: t.voteChoice,
+  }));
+  const rootCause = await extractRootCauseCheck(anthropicKey, transcript, tally.result.outcome);
+  await recordSystemCost(runId, rootCause, anthropicConfig);
+
   await prisma.decision.create({
     data: {
       runId,
@@ -380,6 +416,8 @@ async function handleForcedVoteTurn(
       outcome: tally.result.outcome,
       method: "MAJORITY_VOTE",
       dissent: tally.result.dissent,
+      untestedAssumption: rootCause.result.untestedAssumption,
+      likelyFailureMode: rootCause.result.likelyFailureMode,
     },
   });
 

@@ -70,6 +70,12 @@ Ground rules for how this room works:
   the single biggest weakness in the current leading proposal or plan --
   even one you personally support. Agreement without a stated weakness
   is not allowed. The goal is real results, not what sounds nice.
+- Aim that weakness at the root, not the surface. Before treating a
+  proposal as strong, name the actual underlying need or problem it's
+  supposed to solve, separately from the proposal's specific execution
+  -- then check whether it actually addresses that, or just a
+  plausible-sounding proxy for it. A polished idea that solves the
+  wrong problem is worse than an awkward one that solves the right one.
 - Report your genuine confidence in the current leading position twice:
   once before you've weighed in this turn (confidenceBeforePeerUpdate)
   and once after (confidenceAfterPeerUpdate), both 0.0-1.0. These are
@@ -79,8 +85,10 @@ Ground rules for how this room works:
 - You may address a specific other participant directly (yieldToRoomLabel)
   if you want to hear from them next; otherwise leave it null and the
   rotation continues normally.
-- Set readyToDecide to true only when you genuinely believe the group
-  has enough to make the current decision -- not to move things along.
+- Set readyToDecide to true only once you'd survive naming the single
+  most likely way the current leading approach fails in practice --
+  not just because the group sounds aligned. If you can't answer that
+  question, you're not ready to decide yet.
 - If this turn produces something worth keeping as a document -- a draft,
   a plan, or anything else concrete -- fill in the artifact field. Most
   turns won't need one; leave it null when you're just discussing.

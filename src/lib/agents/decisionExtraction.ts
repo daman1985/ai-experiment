@@ -34,6 +34,17 @@ const voteTallyExtractionSchema = z.object({
     .describe("Any agent(s) whose vote did not match the winning position, and why they voted differently. Empty array if unanimous."),
 });
 
+const rootCauseCheckSchema = z.object({
+  untestedAssumption: z
+    .string()
+    .describe(
+      "The single most significant assumption this decision rests on that nobody in the conversation actually tested or verified -- not a restatement of a weakness someone already raised and addressed.",
+    ),
+  likelyFailureMode: z
+    .string()
+    .describe("If that assumption turns out to be wrong, the most likely concrete way this decision fails in practice."),
+});
+
 async function callExtraction<T>(
   apiKey: string,
   system: string,
@@ -92,5 +103,24 @@ export async function extractVoteTally(
     "You tally votes cast by a group of AI agents. Determine the majority (or plurality) position and identify any dissent. Do not judge which position is better -- only report the count.",
     `Votes cast:\n\n${voteText}\n\n---\n\nWhich position won, and who (if anyone) dissented?`,
     voteTallyExtractionSchema,
+  );
+}
+
+// A structural analog to an "enhancing cognition"-style re-evaluation
+// gate, run once over the finished decision rather than folded into the
+// per-turn schema -- see the comment on Decision.untestedAssumption in
+// schema.prisma for why. This is a skeptical outside read, not a
+// continuation of the debate: it never argues for a different outcome,
+// only names what the group didn't actually examine.
+export async function extractRootCauseCheck(
+  apiKey: string,
+  transcript: TranscriptEntryForPrompt[],
+  outcome: string,
+) {
+  return callExtraction(
+    apiKey,
+    "You are a skeptical outside reviewer reading a decision a group of AI agents just reached. You do not participate in or relitigate the decision -- you identify what the group didn't actually examine, based only on what they said.",
+    `Conversation:\n\n${formatTranscript(transcript)}\n\n---\n\nThe group decided: ${outcome}\n\nWhat is the single most significant assumption this decision rests on that nobody actually tested or verified in the conversation above? If that assumption is wrong, what's the most likely concrete way this decision fails in practice?`,
+    rootCauseCheckSchema,
   );
 }
