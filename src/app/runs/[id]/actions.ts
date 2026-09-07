@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { advanceRun } from "@/lib/agents/engine";
+import { decrypt } from "@/lib/crypto";
+import { computeCostUsd } from "@/lib/agents";
+import { runExpertAudit, type AuditTranscriptTurn } from "@/lib/agents/expertAudit";
+import type { Prisma } from "@prisma/client";
 
 // Lets an admin watching this run's page pump it forward faster than the
 // 10-minute cron cadence, without changing the cron schedule itself --
@@ -150,4 +154,121 @@ export async function uploadDocumentAction(formData: FormData): Promise<void> {
   });
 
   revalidatePath(`/runs/${runId}`);
+}
+
+interface DissentEntry {
+  agentId: string;
+  reason: string;
+}
+
+function isDissentArray(value: unknown): value is DissentEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.every((v): v is DissentEntry => typeof v === "object" && v !== null && "agentId" in v && "reason" in v)
+  );
+}
+
+// On-demand, per-decision audit by a model that never participated in the
+// deliberation -- see lib/agents/expertAudit.ts for why this is worth
+// doing at all (it's given confidence telemetry no participant, and no
+// other extraction step, ever sees) and why it deliberately isn't wired
+// into advanceRun: it's a heavier, admin-opted-into call that shouldn't
+// compete with the cron tick's own 60s budget. Idempotent -- a decision
+// can only have one ExpertAudit (see the unique decisionId), so a second
+// click after one succeeded is a silent no-op rather than spending twice.
+export async function runExpertAuditAction(formData: FormData): Promise<void> {
+  const decisionId = String(formData.get("decisionId"));
+  const decision = await prisma.decision.findUnique({
+    where: { id: decisionId },
+    include: { expertAudit: true },
+  });
+  if (!decision) throw new Error("Decision not found.");
+  if (decision.expertAudit) return;
+
+  const anthropicConfig = await prisma.providerConfig.findUnique({ where: { provider: "ANTHROPIC" } });
+  if (!anthropicConfig) {
+    throw new Error("Expert audit requires an Anthropic API key configured in admin settings.");
+  }
+
+  const [turns, agents] = await Promise.all([
+    prisma.turn.findMany({
+      where: { runId: decision.runId, sequenceNumber: { lte: decision.afterSequenceNumber } },
+      orderBy: { sequenceNumber: "asc" },
+      include: { agent: true },
+    }),
+    prisma.agent.findMany({ where: { runId: decision.runId } }),
+  ]);
+  const agentNameById = new Map(agents.map((a) => [a.id, a.displayName]));
+
+  const auditTurns: AuditTranscriptTurn[] = turns.map((t) => ({
+    speakerDisplayName: t.agent.displayName,
+    message: t.message,
+    weaknessCritique: t.weaknessCritique,
+    confidenceBeforePeerUpdate: t.confidenceBeforePeerUpdate,
+    confidenceAfterPeerUpdate: t.confidenceAfterPeerUpdate,
+    readyToDecide: t.readyToDecide,
+    isVote: t.isVote,
+    voteChoice: t.voteChoice,
+  }));
+
+  const dissent = isDissentArray(decision.dissent) ? decision.dissent : [];
+  const apiKey = decrypt({
+    encrypted: anthropicConfig.encryptedApiKey,
+    iv: anthropicConfig.iv,
+    authTag: anthropicConfig.authTag,
+  });
+
+  const { result, inputTokens, outputTokens } = await runExpertAudit(
+    apiKey,
+    anthropicConfig.defaultModelId,
+    auditTurns,
+    {
+      outcome: decision.outcome,
+      method: decision.method,
+      dissent: dissent.map((d) => ({
+        agentDisplayName: agentNameById.get(d.agentId) ?? "Unknown",
+        reason: d.reason,
+      })),
+      untestedAssumption: decision.untestedAssumption,
+      likelyFailureMode: decision.likelyFailureMode,
+    },
+  );
+
+  const costUsd = computeCostUsd({
+    inputTokens,
+    outputTokens,
+    inputPricePerMillion: Number(anthropicConfig.inputPricePerMillion),
+    outputPricePerMillion: Number(anthropicConfig.outputPricePerMillion),
+  });
+
+  await prisma.$transaction([
+    prisma.expertAudit.create({
+      data: {
+        runId: decision.runId,
+        decisionId: decision.id,
+        verdict: result.verdict,
+        verdictRationale: result.verdictRationale,
+        fatalFlaws: result.fatalFlaws as unknown as Prisma.InputJsonValue,
+        residualLossDetected: result.residualLossDetected as unknown as Prisma.InputJsonValue,
+        explorationGainScore: result.explorationGain.score,
+        explorationGainNote: result.explorationGain.note,
+        informationGainScore: result.informationGain.score,
+        informationGainNote: result.informationGain.note,
+        aggregationGainScore: result.aggregationGain.score,
+        aggregationGainNote: result.aggregationGain.note,
+        redTeamInjection: result.redTeamInjection,
+        productGaps: result.productGaps as unknown as Prisma.InputJsonValue,
+        topRecommendation: result.topRecommendation,
+        inputTokens,
+        outputTokens,
+        costUsd,
+      },
+    }),
+    prisma.run.update({
+      where: { id: decision.runId },
+      data: { systemSpendUsd: { increment: costUsd } },
+    }),
+  ]);
+
+  revalidatePath(`/runs/${decision.runId}`);
 }

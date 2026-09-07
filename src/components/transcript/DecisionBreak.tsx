@@ -1,5 +1,7 @@
-import type { Decision } from "@prisma/client";
+import type { Decision, ExpertAudit } from "@prisma/client";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { runExpertAuditAction } from "@/app/runs/[id]/actions";
 
 interface DissentEntry {
   agentId: string;
@@ -16,17 +18,115 @@ function isDissentArray(value: unknown): value is DissentEntry[] {
   );
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+const VERDICT_VARIANT = {
+  PASS: "success",
+  MIXED: "warning",
+  FAIL: "error",
+} as const;
+
+// A collapsed-by-default deep-dive into one decision, run on demand by an
+// admin, by a model that never participated in the deliberation -- see
+// lib/agents/expertAudit.ts. Kept visually secondary to the decision
+// itself (this is scrutiny of the process, not part of the room's own
+// output) via <details> rather than always-open.
+function ExpertAuditPanel({ audit }: { audit: ExpertAudit }) {
+  const fatalFlaws = isStringArray(audit.fatalFlaws) ? audit.fatalFlaws : [];
+  const residualLoss = isStringArray(audit.residualLossDetected) ? audit.residualLossDetected : [];
+  const productGaps = isStringArray(audit.productGaps) ? audit.productGaps : [];
+
+  return (
+    <details className="mt-4 rounded-md border border-border bg-surface px-3 py-2 text-sm">
+      <summary className="cursor-pointer list-none outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <span className="flex items-center gap-2">
+          <Badge variant={VERDICT_VARIANT[audit.verdict]}>Expert audit: {audit.verdict}</Badge>
+          <span className="text-xs text-text-tertiary">{audit.verdictRationale}</span>
+        </span>
+      </summary>
+      <div className="mt-3 space-y-3 border-t border-border pt-3 text-text-secondary">
+        {fatalFlaws.length > 0 && (
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
+              Fatal flaws
+            </p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5">
+              {fatalFlaws.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {residualLoss.length > 0 && (
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
+              Residual loss detected
+            </p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5">
+              {residualLoss.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {[
+            { label: "Exploration", score: audit.explorationGainScore, note: audit.explorationGainNote },
+            { label: "Information", score: audit.informationGainScore, note: audit.informationGainNote },
+            { label: "Aggregation", score: audit.aggregationGainScore, note: audit.aggregationGainNote },
+          ].map((d) => (
+            <div key={d.label} className="rounded-sm border border-border p-2">
+              <p className="text-xs font-medium text-text-primary">
+                {d.label} <span className="tabular-nums text-text-tertiary">{d.score}/10</span>
+              </p>
+              <p className="mt-0.5 text-xs text-text-tertiary">{d.note}</p>
+            </div>
+          ))}
+        </div>
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
+            Red-team injection
+          </p>
+          <p className="mt-1">{audit.redTeamInjection}</p>
+        </div>
+        {productGaps.length > 0 && (
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
+              Product gaps this exposed
+            </p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5">
+              {productGaps.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
+            Top recommendation
+          </p>
+          <p className="mt-1 font-medium text-text-primary">{audit.topRecommendation}</p>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 // The one deliberate interruption of the normal turn rhythm -- a
 // chapter-divider moment marking that something resolved. See
 // docs/design-system.md, "Decision moment."
 export function DecisionBreak({
   decision,
+  audit,
   agentNameById,
   tabIndex,
   posinset,
   setsize,
 }: {
   decision: Decision;
+  audit: ExpertAudit | null;
   agentNameById: Map<string, string>;
   tabIndex: number;
   posinset: number;
@@ -73,6 +173,16 @@ export function DecisionBreak({
             </p>
           ))}
         </div>
+      )}
+      {audit ? (
+        <ExpertAuditPanel audit={audit} />
+      ) : (
+        <form action={runExpertAuditAction} className="mt-4">
+          <input type="hidden" name="decisionId" value={decision.id} />
+          <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
+            Run expert audit
+          </Button>
+        </form>
       )}
     </div>
   );

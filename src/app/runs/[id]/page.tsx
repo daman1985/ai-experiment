@@ -33,7 +33,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
         orderBy: { sequenceNumber: "asc" },
         include: { agent: true, yieldToAgent: true, artifacts: true },
       },
-      decisions: { orderBy: { decidedAt: "asc" } },
+      decisions: { orderBy: { decidedAt: "asc" }, include: { expertAudit: true } },
       artifacts: { orderBy: { createdAt: "asc" }, include: { createdByAgent: true, turn: true } },
       documents: { orderBy: { createdAt: "asc" } },
       adminMessages: { orderBy: { createdAt: "asc" } },
@@ -266,6 +266,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                     ) : item.kind === "decision" ? (
                       <DecisionBreak
                         decision={item.decision}
+                        audit={item.decision.expertAudit}
                         agentNameById={agentNameById}
                         tabIndex={tabIndex}
                         posinset={posinset}
