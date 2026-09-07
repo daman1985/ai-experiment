@@ -139,29 +139,59 @@ anyone's visual identity.
   the viewport from someone scrolled up reading backlog — show an
   anchored "N new — jump to live" control instead.
 
-**Ours to invent — do not decide unilaterally, bring to the admin first:**
-Nothing in any reference product actually has these, because nothing we
-studied has this app's content. This is where the app's actual
-personality lives, and it needs a human decision, not a best-guess.
+**Decided:**
 
-- The accent color itself (not blue-because-Mercury-is-blue — pick
-  something because it's right for this product).
-- The specific typeface pairing.
-- How the three (or N) agents get visually distinguished from each
-  other — the color-per-provider system, and whether/how any non-color
-  identity mark is used (never their real corporate logos — invent our
-  own simple marks).
-- How the mandatory weakness-critique field is visually treated —
-  this has no precedent anywhere; it's the single most distinctive
-  piece of content in the app and deserves a considered, specific
-  treatment, not a generic "secondary text, muted color" default.
-- How a consensus or forced-vote moment is presented when it resolves —
-  this is a narratively significant event (three AI systems reaching or
-  failing to reach agreement) and a generic status-changed-to-resolved
-  treatment would undersell it.
-- How an agent-produced artifact (a business plan draft, a landing page
-  draft) surfaces in the feed.
-- Any "signature" personality motif for the product as a whole.
+- **Accent color: deep teal/petrol** — starting hex `#0F6B67` (dark
+  enough to also work as text/icon color at full opacity, not just a
+  button fill; tune visually once rendered, this is a starting point
+  not a final measurement). Reserved exclusively for interactive/
+  actionable signals — primary buttons, active nav state, focus rings.
+  Never used for static text, decorative borders, or agent identity.
+- **Typeface pairing: serif headers + clean sans body.** Headers/titles/
+  section labels in **Newsreader** (Google Fonts, genuinely editorial —
+  designed for online publication contexts, more character than the
+  more neutral Source Serif 4). Transcript body, controls, and data
+  stay in **Geist Sans** (already in the project via `next/font/google`).
+  Monospace stays Geist Mono, reserved per the engineering specs above
+  (technical identifiers only, never all metadata).
+
+- **Agent identity: three-opacity-tier color per agent, plus a circular
+  avatar icon.** Each agent gets one low-saturation hue (full opacity on
+  name label, 6% row background wash, 20% border — the vault research's
+  exact mechanism) *and* a small circular avatar icon so identity never
+  depends on memorizing which color is which. Admin's explicit call:
+  the provider's real logo in the circle is acceptable for now, since
+  the app is private and password-gated. Revisit if the app is ever
+  made public — displaying real trademarked marks on a page whose
+  premise is "these companies' models run a fictional company" reads
+  differently once it's not just for one person to see. Implementation
+  detail (real logo vs. a tasteful approximation per provider) to be
+  resolved during the build phase, not blocking here.
+- **Weakness-critique field: marginalia treatment.** A thin rule or
+  bracket to the left of the critique text, set in a slightly different
+  type treatment (italic or a lighter weight) than the main message —
+  reads as the agent stepping outside its own statement to annotate
+  itself. Always visible, never hidden behind a disclosure.
+- **Decision moment (consensus/forced vote): full-width break in the
+  feed.** A deliberate interruption of the normal turn rhythm — like a
+  chapter divider — marking that something resolved. Uses the "break a
+  repeated chrome pattern intentionally" idea from the squint-test rule,
+  applied on purpose at a genuinely significant moment rather than by
+  accident.
+- **Artifacts: both.** An inline preview card (title + first line,
+  expandable) appears in the transcript at the moment of creation, the
+  existing separate collapsible Artifacts section stays, and that
+  section gets richer grouping (by phase, linked back to the producing
+  turn).
+- **Signature motif: turn-order stepper.** Small marks for each active
+  agent, current position highlighted. Does double duty as the
+  practical "whose turn is it" indicator (linear, not a graph — per the
+  node-graph research finding) and as the one deliberate personality
+  touch in the shell.
+
+All "ours to invent" decisions are now resolved as of this pass. Any
+new one that comes up during implementation should be added here and
+brought to the admin the same way, not decided in code.
 
 ## Engineering specs (safe to build against directly)
 
