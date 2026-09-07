@@ -63,6 +63,16 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
 // path rather than gambling the turn on an unverified capability. Worth
 // smoke-testing the single-call path directly against a real key before
 // optimizing this away.
+// Diagnosed directly from a production cron tick: the Anthropic and
+// OpenAI SDKs both default to a 10-MINUTE request timeout with automatic
+// retries, and a hung provider call was observed blowing straight through
+// the cron route's 60s maxDuration -- the function gets hard-killed
+// before the call's own try/catch ever runs. This SDK's default is
+// unconfirmed but the same risk applies, so it gets the same explicit
+// bound rather than trusting whatever the default turns out to be.
+const RESEARCH_TIMEOUT_MS = 20_000;
+const TURN_TIMEOUT_MS = 25_000;
+
 export const geminiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     const ai = new GoogleGenAI({ apiKey: input.apiKey });
@@ -80,6 +90,7 @@ export const geminiAdapter: ProviderAdapter = {
           config: {
             systemInstruction: input.systemPrompt,
             tools: [{ googleSearch: {} }],
+            httpOptions: { timeout: RESEARCH_TIMEOUT_MS },
           },
         });
 
@@ -135,6 +146,7 @@ export const geminiAdapter: ProviderAdapter = {
         systemInstruction: input.systemPrompt,
         responseMimeType: "application/json",
         responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
+        httpOptions: { timeout: TURN_TIMEOUT_MS },
       },
     });
 

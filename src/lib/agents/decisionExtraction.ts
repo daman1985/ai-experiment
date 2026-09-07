@@ -12,6 +12,12 @@ import type { TranscriptEntryForPrompt } from "./schema";
 // are using this run.
 const EXTRACTION_MODEL_ID = "claude-haiku-4-5";
 
+// Same reasoning as the provider adapters: the Anthropic SDK defaults to
+// a 10-minute request timeout with automatic retries, which is far
+// longer than the cron route's 60s budget can tolerate for a call that
+// runs inline during a tick (checkConsensus / handleForcedVoteTurn).
+const EXTRACTION_TIMEOUT_MS = 15_000;
+
 const consensusExtractionSchema = z.object({
   outcome: z
     .string()
@@ -42,14 +48,17 @@ async function callExtraction<T>(
   prompt: string,
   schema: z.ZodType<T>,
 ): Promise<{ result: T; inputTokens: number; outputTokens: number }> {
-  const client = new Anthropic({ apiKey });
-  const response = await client.messages.parse({
-    model: EXTRACTION_MODEL_ID,
-    max_tokens: 1000,
-    system,
-    output_config: { format: zodOutputFormat(schema) },
-    messages: [{ role: "user", content: prompt }],
-  });
+  const client = new Anthropic({ apiKey, maxRetries: 1 });
+  const response = await client.messages.parse(
+    {
+      model: EXTRACTION_MODEL_ID,
+      max_tokens: 1000,
+      system,
+      output_config: { format: zodOutputFormat(schema) },
+      messages: [{ role: "user", content: prompt }],
+    },
+    { timeout: EXTRACTION_TIMEOUT_MS },
+  );
   if (!response.parsed_output) {
     throw new Error("Decision extraction call failed to parse.");
   }
