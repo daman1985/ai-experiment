@@ -7,6 +7,7 @@ import { TurnStepper } from "@/components/transcript/TurnStepper";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
 import { DocumentShared } from "@/components/transcript/DocumentShared";
 import { AdminMessageRow } from "@/components/transcript/AdminMessageRow";
+import { ExtendRoundsButton } from "@/components/transcript/ExtendRoundsButton";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -162,13 +163,15 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               )}
               <form action={extendRoundsAction}>
                 <input type="hidden" name="runId" value={run.id} />
-                <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
-                  {run.status === "COMPLETED"
-                    ? `Reopen — continue ${run.forcedVoteRoundCap} more rounds`
-                    : run.forcedVotePending
-                      ? `Cancel vote — continue ${run.forcedVoteRoundCap} more rounds`
-                      : `Continue ${run.forcedVoteRoundCap} more rounds`}
-                </Button>
+                <ExtendRoundsButton
+                  label={
+                    run.status === "COMPLETED"
+                      ? `Reopen — continue ${run.forcedVoteRoundCap} more rounds`
+                      : run.forcedVotePending
+                        ? `Cancel vote — continue ${run.forcedVoteRoundCap} more rounds`
+                        : `Continue ${run.forcedVoteRoundCap} more rounds`
+                  }
+                />
               </form>
             </div>
           )}
