@@ -83,21 +83,48 @@ async function turnsSinceLastDecision(run: Pick<Run, "id" | "extendedAtSequenceN
   });
 }
 
+// Merges agent turns and admin chat messages into one chronological
+// transcript by createdAt -- an AdminMessage doesn't share Turn's
+// sequenceNumber space (it's outside the round-cap/rotation machinery
+// entirely, see the schema comment), so timestamp order is what actually
+// determines where it reads as having been said.
 async function fullTranscript(runId: string): Promise<TranscriptEntryForPrompt[]> {
-  const turns = await prisma.turn.findMany({
-    where: { runId },
-    orderBy: { sequenceNumber: "asc" },
-    include: { agent: true, yieldToAgent: true },
-  });
-  return turns.map((t) => ({
-    speakerRoomLabel: roomLabel(t.agent.seatIndex),
-    message: t.message,
-    weaknessCritique: t.weaknessCritique,
-    readyToDecide: t.readyToDecide,
-    yieldToRoomLabel: t.yieldToAgent ? roomLabel(t.yieldToAgent.seatIndex) : null,
-    isVote: t.isVote,
-    voteChoice: t.voteChoice,
+  const [turns, adminMessages] = await Promise.all([
+    prisma.turn.findMany({
+      where: { runId },
+      orderBy: { sequenceNumber: "asc" },
+      include: { agent: true, yieldToAgent: true },
+    }),
+    prisma.adminMessage.findMany({ where: { runId }, orderBy: { createdAt: "asc" } }),
+  ]);
+  const turnEntries = turns.map((t) => ({
+    at: t.createdAt,
+    entry: {
+      speakerRoomLabel: roomLabel(t.agent.seatIndex),
+      message: t.message,
+      weaknessCritique: t.weaknessCritique,
+      readyToDecide: t.readyToDecide,
+      yieldToRoomLabel: t.yieldToAgent ? roomLabel(t.yieldToAgent.seatIndex) : null,
+      isVote: t.isVote,
+      voteChoice: t.voteChoice,
+    },
   }));
+  const adminEntries = adminMessages.map((m) => ({
+    at: m.createdAt,
+    entry: {
+      speakerRoomLabel: "Admin",
+      message: m.message,
+      weaknessCritique: "",
+      readyToDecide: false,
+      yieldToRoomLabel: null,
+      isVote: false,
+      voteChoice: null,
+      isAdminMessage: true,
+    },
+  }));
+  return [...turnEntries, ...adminEntries]
+    .sort((a, b) => a.at.getTime() - b.at.getTime())
+    .map((e) => e.entry);
 }
 
 async function advanceRunLocked(runId: string): Promise<AdvanceResult> {

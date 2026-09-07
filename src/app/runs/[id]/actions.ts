@@ -15,6 +15,32 @@ export async function advanceRunNowAction(runId: string): Promise<void> {
   await advanceRun(runId);
 }
 
+const MAX_ADMIN_MESSAGE_LENGTH = 4000;
+
+// Lets the admin actually speak in the room instead of only observing or
+// steering indirectly (documents, forcing a vote) -- see AdminMessage in
+// schema.prisma for why this deliberately sits outside the round-cap and
+// rotation machinery: posting one is instant (no LLM call, no lock to
+// contend with advanceRun for) and never changes whose turn is next. The
+// next agent to speak, on whatever cadence already applies, reads it in
+// their transcript like anything else that's been said.
+export async function postAdminMessageAction(formData: FormData): Promise<void> {
+  const runId = String(formData.get("runId"));
+  const message = String(formData.get("message") ?? "").trim();
+  if (!message) {
+    throw new Error("Message can't be empty.");
+  }
+  if (message.length > MAX_ADMIN_MESSAGE_LENGTH) {
+    throw new Error(`Message is too long -- ${MAX_ADMIN_MESSAGE_LENGTH} characters max.`);
+  }
+  const run = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
+  if (!run || run.status !== "ACTIVE") {
+    throw new Error("Can only post to an active run.");
+  }
+  await prisma.adminMessage.create({ data: { runId, message } });
+  revalidatePath(`/runs/${runId}`);
+}
+
 // Skips straight to a forced vote instead of waiting for the round cap --
 // the room resolves this specific disagreement on the next round rather
 // than the admin needing to wait out however many rounds are left.

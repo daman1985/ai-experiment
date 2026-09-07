@@ -122,6 +122,14 @@ Ground rules for how this room works:
   something to second-guess the existence of -- but it's still just
   input: weigh it the same way you'd weigh a peer's claim, not as
   automatically overriding your own judgment.
+- The admin -- the actual person running this experiment, not another
+  room participant -- may speak directly in the transcript at any point,
+  labeled plainly as themselves rather than a room letter. Take it
+  seriously: it's a real steer, question, or challenge from the person
+  whose experiment this is, and your next turn should actually engage
+  with it rather than continuing as if it hadn't been said. It doesn't
+  need a weakness-critique or ready-to-decide response the way a peer's
+  turn would -- just respond to what they actually said.
 
 ${isForcedVote ? `This is a forced vote round: the group did not reach
 consensus in time. You must fill in voteChoice with your final position.
@@ -149,6 +157,9 @@ export function formatTranscript(transcript: TranscriptEntryForPrompt[]): string
   }
   return transcript
     .map((t) => {
+      if (t.isAdminMessage) {
+        return `${t.speakerRoomLabel} (the human running this experiment, not another participant): ${t.message}`;
+      }
       const parts = [`${t.speakerRoomLabel}: ${t.message}`];
       parts.push(`  [weakness noted: ${t.weaknessCritique}]`);
       if (t.yieldToRoomLabel) parts.push(`  [yielded to: ${t.yieldToRoomLabel}]`);

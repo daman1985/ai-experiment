@@ -89,6 +89,11 @@ export interface TranscriptEntryForPrompt {
   yieldToRoomLabel: string | null;
   isVote: boolean;
   voteChoice: string | null;
+  // True only for a message from the actual human running the
+  // experiment (see AdminMessage in schema.prisma) -- formatTranscript
+  // renders these without the per-turn bookkeeping fields, since none of
+  // it applies to something a person just said.
+  isAdminMessage?: boolean;
 }
 
 export interface RunTurnInput {

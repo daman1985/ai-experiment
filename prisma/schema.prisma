@@ -128,11 +128,29 @@ model Run {
   startedAt DateTime?
   endedAt   DateTime?
 
-  agents    Agent[]
-  turns     Turn[]
-  decisions Decision[]
-  artifacts Artifact[]
-  documents Document[]
+  agents        Agent[]
+  turns         Turn[]
+  decisions     Decision[]
+  artifacts     Artifact[]
+  documents     Document[]
+  adminMessages AdminMessage[]
+}
+
+// A message from the actual human running the experiment, not another
+// room participant -- shown to agents under its own real "Admin" label
+// (never anonymized to a room letter the way agents are), broadcast to
+// every agent (no per-recipient scoping the way Document has), and
+// merged into the transcript by createdAt rather than sharing Turn's
+// sequenceNumber space. Deliberately outside the round-cap/rotation
+// machinery entirely: posting one never counts as a round, never resets
+// the forced-vote clock, and never changes whose turn is next -- it's
+// additional context for whoever speaks next, not a turn itself.
+model AdminMessage {
+  id        String   @id @default(cuid())
+  runId     String
+  run       Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  message   String
+  createdAt DateTime @default(now())
 }
 
 // Admin-uploaded context, introduced at any point during an active run --

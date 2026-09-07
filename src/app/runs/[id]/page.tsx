@@ -6,12 +6,19 @@ import { AgentAvatar } from "@/components/transcript/AgentAvatar";
 import { TurnStepper } from "@/components/transcript/TurnStepper";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
 import { DocumentShared } from "@/components/transcript/DocumentShared";
+import { AdminMessageRow } from "@/components/transcript/AdminMessageRow";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { AGENT_STYLES } from "@/lib/agents/agentColor";
 import { fmtUsd, runStatusVariant } from "@/lib/format";
-import { forceVoteNowAction, extendRoundsAction, uploadDocumentAction } from "./actions";
+import {
+  forceVoteNowAction,
+  extendRoundsAction,
+  uploadDocumentAction,
+  postAdminMessageAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +36,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
       decisions: { orderBy: { decidedAt: "asc" } },
       artifacts: { orderBy: { createdAt: "asc" }, include: { createdByAgent: true, turn: true } },
       documents: { orderBy: { createdAt: "asc" } },
+      adminMessages: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!run) notFound();
@@ -61,11 +69,15 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
   type FeedItem =
     | { kind: "turn"; at: Date; turn: (typeof run.turns)[number] }
     | { kind: "decision"; at: Date; decision: (typeof run.decisions)[number] }
-    | { kind: "document"; at: Date; document: (typeof run.documents)[number] };
+    | { kind: "document"; at: Date; document: (typeof run.documents)[number] }
+    | { kind: "adminMessage"; at: Date; adminMessage: (typeof run.adminMessages)[number] };
   const feed: FeedItem[] = [
     ...run.turns.map((t): FeedItem => ({ kind: "turn", at: t.createdAt, turn: t })),
     ...run.decisions.map((d): FeedItem => ({ kind: "decision", at: d.decidedAt, decision: d })),
     ...run.documents.map((doc): FeedItem => ({ kind: "document", at: doc.createdAt, document: doc })),
+    ...run.adminMessages.map(
+      (m): FeedItem => ({ kind: "adminMessage", at: m.createdAt, adminMessage: m }),
+    ),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
   // Plain, serializable metadata for LiveTranscript to diff between polls
@@ -87,10 +99,17 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
         label: "Decision reached",
       };
     }
+    if (item.kind === "document") {
+      return {
+        id: item.document.id,
+        anchorId: `document-${item.document.id}`,
+        label: `${item.document.filename} shared`,
+      };
+    }
     return {
-      id: item.document.id,
-      anchorId: `document-${item.document.id}`,
-      label: `${item.document.filename} shared`,
+      id: item.adminMessage.id,
+      anchorId: `admin-message-${item.adminMessage.id}`,
+      label: "New message from you",
     };
   });
 
@@ -196,7 +215,9 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                   ? item.turn.id
                   : item.kind === "decision"
                     ? item.decision.id
-                    : item.document.id;
+                    : item.kind === "document"
+                      ? item.document.id
+                      : item.adminMessage.id;
               // Roving tabindex + the ARIA "feed" pattern's aria-posinset/
               // aria-setsize -- see docs/design-system.md, "Long-transcript
               // performance/accessibility." Only the first item starts as
@@ -223,10 +244,17 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                         posinset={posinset}
                         setsize={setsize}
                       />
-                    ) : (
+                    ) : item.kind === "document" ? (
                       <div id={`document-${item.document.id}`}>
                         <DocumentShared document={item.document} agentNameById={agentNameById} />
                       </div>
+                    ) : (
+                      <AdminMessageRow
+                        message={item.adminMessage}
+                        tabIndex={tabIndex}
+                        posinset={posinset}
+                        setsize={setsize}
+                      />
                     )}
                   </NewItemFade>
                 </div>
@@ -234,6 +262,23 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
             })}
           </section>
         </LiveTranscript>
+
+        {run.status === "ACTIVE" && (
+          <form action={postAdminMessageAction} className="mt-4 flex gap-2">
+            <input type="hidden" name="runId" value={run.id} />
+            <Input
+              type="text"
+              name="message"
+              required
+              maxLength={4000}
+              placeholder="Say something to the room..."
+              className="flex-1"
+            />
+            <Button type="submit" variant="primary" className="px-4">
+              Send
+            </Button>
+          </form>
+        )}
 
         {run.artifacts.length > 0 && (
           <section className="mt-10 space-y-2" aria-label="Artifacts">
