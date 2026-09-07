@@ -11,6 +11,21 @@ type TurnWithRelations = Turn & {
   artifacts: Artifact[];
 };
 
+interface ToolCallEntry {
+  query: string;
+  resultSummary: string;
+}
+
+function isToolCallArray(value: unknown): value is ToolCallEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (v): v is ToolCallEntry =>
+        typeof v === "object" && v !== null && "query" in v && "resultSummary" in v,
+    )
+  );
+}
+
 // One row in the continuous transcript surface -- deliberately not a
 // card (see docs/design-system.md's explicit rejection of "a card for
 // every single message"). The avatar column stays at a fixed left edge
@@ -34,7 +49,9 @@ export function TurnRow({
   setsize: number;
 }) {
   const styles = AGENT_STYLES[turn.agent.provider];
-  const hasStatus = turn.readyToDecide || turn.runComplete || turn.yieldToAgent || turn.isVote;
+  const toolCalls = isToolCallArray(turn.toolCalls) ? turn.toolCalls : [];
+  const hasStatus =
+    turn.readyToDecide || turn.runComplete || turn.yieldToAgent || turn.isVote || toolCalls.length > 0;
 
   return (
     <div
@@ -78,7 +95,24 @@ export function TurnRow({
               {turn.isVote && (
                 <Badge variant="warning">Vote{turn.voteChoice ? `: ${turn.voteChoice}` : ""}</Badge>
               )}
+              {toolCalls.length > 0 && <Badge variant="neutral">Searched</Badge>}
             </div>
+          )}
+
+          {toolCalls.length > 0 && (
+            <details className="mt-2 text-xs text-text-tertiary">
+              <summary className="cursor-pointer select-none outline-none hover:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent">
+                {toolCalls.length} search{toolCalls.length > 1 ? "es" : ""} this turn
+              </summary>
+              <ul className="mt-1 space-y-1 pl-3">
+                {toolCalls.map((tc, i) => (
+                  <li key={i}>
+                    <span className="text-text-secondary">&ldquo;{tc.query}&rdquo;</span>
+                    {tc.resultSummary && <> &mdash; {tc.resultSummary}</>}
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
 
           {turn.artifacts.map((artifact) => (
