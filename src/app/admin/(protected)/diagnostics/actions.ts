@@ -81,7 +81,7 @@ export async function runRealPromptCheckAction(): Promise<void> {
     documents: [],
   });
 
-  const [research, turn] = await Promise.all([
+  const [research, turn, bareWithRealSystem] = await Promise.all([
     timedCall(
       (signal) =>
         client.messages.create(
@@ -112,6 +112,25 @@ export async function runRealPromptCheckAction(): Promise<void> {
         ),
       CHECK_TIMEOUT_MS,
     ),
+    // The decisive bisection: the real system prompt, but no tools and
+    // no structured-output schema -- a completely bare completion. If
+    // this ALSO hangs, the system prompt content alone is sufficient to
+    // trigger it, independent of tool-use or structured output. If it
+    // succeeds, the hang requires the real system prompt *combined with*
+    // one of those two features.
+    timedCall(
+      (signal) =>
+        client.messages.create(
+          {
+            model: config.defaultModelId,
+            max_tokens: 50,
+            system: systemPrompt,
+            messages: [{ role: "user", content: "Reply with just the word OK." }],
+          },
+          { timeout: CHECK_TIMEOUT_MS, signal },
+        ),
+      CHECK_TIMEOUT_MS,
+    ),
   ]);
 
   await logDiagnostic({
@@ -129,6 +148,14 @@ export async function runRealPromptCheckAction(): Promise<void> {
       ? `real turn prompt succeeded in ${turn.elapsedMs}ms`
       : `real turn prompt failed after ${turn.elapsedMs}ms: ${turn.error}`,
     detail: { systemPromptLength: systemPrompt.length, turnPromptLength: turnPrompt.length },
+  });
+  await logDiagnostic({
+    source: "diagnose:real-prompt",
+    level: bareWithRealSystem.ok ? "info" : "error",
+    message: bareWithRealSystem.ok
+      ? `real system prompt, no tools/schema, succeeded in ${bareWithRealSystem.elapsedMs}ms`
+      : `real system prompt, no tools/schema, failed after ${bareWithRealSystem.elapsedMs}ms: ${bareWithRealSystem.error}`,
+    detail: { systemPromptLength: systemPrompt.length },
   });
 
   revalidatePath("/admin/diagnostics");
