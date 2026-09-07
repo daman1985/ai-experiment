@@ -2,17 +2,23 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { PROVIDER_REGISTRY } from "@/lib/agents/providerRegistry";
 import { createRunAction, startRunAction, pauseRunAction, stopRunAction } from "../actions";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
 
 // This reads live run/agent state and requires an authenticated session --
 // never prerender it at build time.
 export const dynamic = "force-dynamic";
 
-function statusColor(status: string) {
-  if (status === "ACTIVE") return "text-green-400";
-  if (status === "PAUSED") return "text-yellow-400";
-  if (status.startsWith("STOPPED")) return "text-red-400";
-  if (status === "COMPLETED") return "text-blue-400";
-  return "text-neutral-400";
+type BadgeVariant = "success" | "warning" | "error" | "neutral" | "accent";
+
+function statusVariant(status: string): BadgeVariant {
+  if (status === "ACTIVE") return "success";
+  if (status === "PAUSED") return "warning";
+  if (status.startsWith("STOPPED")) return "error";
+  if (status === "COMPLETED") return "accent";
+  return "neutral";
 }
 
 export default async function AdminDashboard() {
@@ -26,8 +32,8 @@ export default async function AdminDashboard() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-xl font-semibold">Runs</h1>
-        <p className="mt-1 text-sm text-neutral-400">
+        <h1 className="font-serif text-2xl text-text-primary">Runs</h1>
+        <p className="mt-1 text-sm text-text-secondary">
           Each run creates one agent per provider you select below, using the model and pricing
           configured in Settings. Starting a run makes it eligible for the cron job to advance --
           nothing happens until the cron tick fires.
@@ -35,29 +41,29 @@ export default async function AdminDashboard() {
       </div>
 
       <div className="space-y-3">
-        {runs.length === 0 && <p className="text-sm text-neutral-500">No runs yet.</p>}
+        {runs.length === 0 && <p className="text-sm text-text-tertiary">No runs yet.</p>}
         {runs.map((run) => {
           const totalSpend =
             run.agents.reduce((sum, a) => sum + Number(a.spendUsd), 0) + Number(run.systemSpendUsd);
           return (
-            <div
-              key={run.id}
-              className="rounded-lg border border-neutral-800 bg-neutral-900 p-4 text-sm"
-            >
+            <Card key={run.id} className="text-sm">
               <div className="flex items-center justify-between">
-                <div>
-                  <span className="font-medium">{run.name ?? run.id}</span>{" "}
-                  <span className={statusColor(run.status)}>{run.status}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-text-primary">{run.name ?? run.id}</span>
+                  <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
                 </div>
-                <Link href={`/runs/${run.id}`} className="text-neutral-400 hover:underline">
-                  View log →
+                <Link
+                  href={`/runs/${run.id}`}
+                  className="text-text-secondary transition-colors hover:text-text-primary"
+                >
+                  View log &rarr;
                 </Link>
               </div>
-              <div className="mt-1 text-neutral-400">
-                Phase: {run.currentPhase} · Spend: ${totalSpend.toFixed(4)} / $
+              <div className="mt-2 tabular-nums text-text-secondary">
+                Phase: {run.currentPhase} &middot; Spend: ${totalSpend.toFixed(4)} / $
                 {Number(run.totalBudgetCapUsd).toFixed(2)}
               </div>
-              <div className="mt-1 flex gap-3 text-neutral-500">
+              <div className="mt-1 flex flex-wrap gap-x-3 tabular-nums text-text-tertiary">
                 {run.agents.map((a) => (
                   <span key={a.id}>
                     {a.displayName}: ${Number(a.spendUsd).toFixed(4)} / $
@@ -69,112 +75,85 @@ export default async function AdminDashboard() {
                 {run.status !== "ACTIVE" && !run.status.startsWith("STOPPED") && run.status !== "COMPLETED" && (
                   <form action={startRunAction}>
                     <input type="hidden" name="runId" value={run.id} />
-                    <button className="rounded bg-green-900 px-2 py-1 text-xs text-green-200 hover:bg-green-800">
+                    <Button type="submit" variant="primary" className="px-2 py-1 text-xs">
                       Start
-                    </button>
+                    </Button>
                   </form>
                 )}
                 {run.status === "ACTIVE" && (
                   <form action={pauseRunAction}>
                     <input type="hidden" name="runId" value={run.id} />
-                    <button className="rounded bg-yellow-900 px-2 py-1 text-xs text-yellow-200 hover:bg-yellow-800">
+                    <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
                       Pause
-                    </button>
+                    </Button>
                   </form>
                 )}
                 {(run.status === "ACTIVE" || run.status === "PAUSED") && (
                   <form action={stopRunAction}>
                     <input type="hidden" name="runId" value={run.id} />
-                    <button className="rounded bg-red-950 px-2 py-1 text-xs text-red-300 hover:bg-red-900">
+                    <Button type="submit" variant="danger" className="px-2 py-1 text-xs">
                       Stop
-                    </button>
+                    </Button>
                   </form>
                 )}
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      <form
-        action={createRunAction}
-        className="space-y-3 rounded-lg border border-neutral-800 bg-neutral-900 p-5"
-      >
-        <h2 className="font-medium">New run</h2>
-        <div>
-          <label className="mb-1 block text-sm text-neutral-400">Name (optional)</label>
-          <input
-            type="text"
-            name="name"
-            className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm text-neutral-400">
-            Participants (pick at least 2)
-          </label>
-          <div className="flex flex-wrap gap-4">
-            {PROVIDER_REGISTRY.map((p) => {
-              const configured = configuredIds.has(p.id);
-              return (
-                <label
-                  key={p.id}
-                  className={`flex items-center gap-2 text-sm ${configured ? "" : "text-neutral-600"}`}
-                >
-                  <input
-                    type="checkbox"
-                    name="providers"
-                    value={p.id}
-                    defaultChecked={configured}
-                    disabled={!configured}
-                  />
-                  {p.displayName}
-                  {!configured && " (not configured)"}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
+      <form action={createRunAction} className="space-y-4">
+        <Card className="space-y-4">
+          <h2 className="font-serif text-lg text-text-primary">New run</h2>
           <div>
-            <label className="mb-1 block text-sm text-neutral-400">Per-agent budget ($)</label>
-            <input
-              type="number"
-              step="0.01"
-              name="perAgentBudget"
-              defaultValue={30}
-              required
-              className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-            />
+            <label className="mb-1 block text-sm text-text-secondary">Name (optional)</label>
+            <Input type="text" name="name" />
           </div>
           <div>
-            <label className="mb-1 block text-sm text-neutral-400">Total budget cap ($)</label>
-            <input
-              type="number"
-              step="0.01"
-              name="totalBudget"
-              defaultValue={90}
-              required
-              className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-            />
+            <label className="mb-1 block text-sm text-text-secondary">
+              Participants (pick at least 2)
+            </label>
+            <div className="flex flex-wrap gap-4">
+              {PROVIDER_REGISTRY.map((p) => {
+                const configured = configuredIds.has(p.id);
+                return (
+                  <label
+                    key={p.id}
+                    className={`flex items-center gap-2 text-sm ${configured ? "text-text-primary" : "text-text-tertiary"}`}
+                  >
+                    <input
+                      type="checkbox"
+                      name="providers"
+                      value={p.id}
+                      defaultChecked={configured}
+                      disabled={!configured}
+                      className="accent-accent"
+                    />
+                    {p.displayName}
+                    {!configured && " (not configured)"}
+                  </label>
+                );
+              })}
+            </div>
           </div>
-          <div>
-            <label className="mb-1 block text-sm text-neutral-400">Round cap per phase</label>
-            <input
-              type="number"
-              name="roundCapPerPhase"
-              defaultValue={10}
-              required
-              className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
-            />
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="mb-1 block text-sm text-text-secondary">Per-agent budget ($)</label>
+              <Input type="number" step="0.01" name="perAgentBudget" defaultValue={30} required />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-text-secondary">Total budget cap ($)</label>
+              <Input type="number" step="0.01" name="totalBudget" defaultValue={90} required />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-text-secondary">Round cap per phase</label>
+              <Input type="number" name="roundCapPerPhase" defaultValue={10} required />
+            </div>
           </div>
-        </div>
-        <button
-          type="submit"
-          className="w-full rounded bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-white"
-        >
-          Create run
-        </button>
+          <Button type="submit" variant="primary" className="w-full">
+            Create run
+          </Button>
+        </Card>
       </form>
     </div>
   );

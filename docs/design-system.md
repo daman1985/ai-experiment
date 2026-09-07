@@ -200,9 +200,22 @@ inline` block) and `src/app/layout.tsx` (Newsreader font). Verified: a
 throwaway test page confirmed every overridden utility (`rounded-md`,
 `rounded-sm`, `rounded-xl`, `font-serif`, `bg-accent`,
 `text-agent-claude`) compiles to the exact intended value, not just that
-the build succeeds. No component has been updated to consume these yet
-— the app still looks like the old dark theme visually. That's Phases
-2-4 (shared primitives, then Settings/Dashboard, then the Transcript).
+the build succeeds.
+
+**Phase 2 (shared primitives) is done** — `Button`, `Input`, `Card`,
+`Badge` in `src/components/ui/`, proven out on `/admin/login`. Verified
+visually via Playwright screenshots (normal + error state).
+
+**Phase 3 (Settings + Dashboard) is done** — `src/app/admin/(protected)/
+layout.tsx`, `page.tsx` (Dashboard), and `settings/page.tsx` now consume
+the primitives and tokens exclusively; no hardcoded `neutral-*` dark
+classes remain in any admin-authenticated screen. Run status (`ACTIVE`/
+`PAUSED`/`STOPPED*`/`COMPLETED`) maps to `Badge` variants
+(success/warning/error/accent) instead of raw text-color classes.
+Verified visually via Playwright screenshots of both pages, logged in
+against a real run with real provider keys configured. Remaining:
+Phases 4-6 (the Transcript/TurnCard, motion/accessibility, then
+real-content validation).
 
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
