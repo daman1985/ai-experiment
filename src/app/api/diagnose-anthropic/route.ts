@@ -2,36 +2,58 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { turnOutputSchema } from "@/lib/agents/schema";
 
 // TEMPORARY diagnostic route -- not part of the app's normal operation,
 // safe to delete once the "every Anthropic call times out" investigation
-// is resolved. Confirmed from real production ticks: every Anthropic
-// call across every run has hit its full 15s/20s timeout with a 100%
-// failure rate, and the only error ever logged is this app's own
-// withTimeout message -- never a distinct network-level error from the
-// SDK itself. That pattern (silence until *our* timer fires, never
-// Anthropic's own fast rejection) is consistent with the request never
-// getting a response at all, but it needs isolating from this exact
-// runtime (Vercel's own egress to Anthropic), not from anywhere else --
-// testing the key from a different network path (a developer's laptop,
-// this session's own sandboxed environment) wouldn't tell us anything
-// about whether *this* deployment's outbound path is the problem.
-//
-// This makes the smallest possible real call -- no tools, no schema, 10
-// max_tokens -- reusing the exact key/decrypt path the real adapters use,
-// and reports back enough detail to actually distinguish causes: how
-// long it took, and if it failed, whether that was our own timeout
-// firing (silence) or a distinct error Anthropic's own servers returned
-// (auth, rate limit, bad model id, etc.) fast enough to matter.
+// is resolved. First pass (a bare messages.create, no tools, no schema,
+// 10 max_tokens) confirmed from the exact production runtime that the
+// key, model id, and network egress to Anthropic are all fine -- it
+// returned in 1.36s. So the hang is specific to something about the
+// *real* request shape the provider adapter actually sends, which this
+// bare call didn't exercise. The two things the real research and turn
+// calls add on top of a bare call are (a) the web_search tool and (b)
+// structured-output schema formatting (output_config/zodOutputFormat via
+// messages.parse) -- this runs both in isolation, alongside the
+// already-confirmed bare call, to find out which one (or both) is
+// actually responsible, rather than guessing further.
 //
 // Gated with the same CRON_SECRET bearer token the tick route already
-// uses, rather than inventing a new secret -- this never needs the
-// user's actual Anthropic key exposed to whoever calls it, only the
-// app's own already-provisioned bearer secret.
-export const maxDuration = 30;
+// uses, rather than inventing a new secret.
+export const maxDuration = 45;
 export const dynamic = "force-dynamic";
 
-const DIAGNOSTIC_TIMEOUT_MS = 20_000;
+const CHECK_TIMEOUT_MS = 20_000;
+
+interface CheckResult {
+  outcome: "success" | "silent_hang" | "distinct_error";
+  elapsedMs: number;
+  detail?: string;
+  errorName?: string;
+  errorMessage?: string;
+}
+
+async function runCheck(fn: (signal: AbortSignal) => Promise<string>): Promise<CheckResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
+  const start = Date.now();
+  try {
+    const detail = await fn(controller.signal);
+    return { outcome: "success", elapsedMs: Date.now() - start, detail };
+  } catch (err) {
+    const elapsedMs = Date.now() - start;
+    const wasOurTimeout = controller.signal.aborted;
+    return {
+      outcome: wasOurTimeout ? "silent_hang" : "distinct_error",
+      elapsedMs,
+      errorName: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function GET(request: NextRequest) {
   const configuredSecret = process.env.CRON_SECRET;
@@ -50,47 +72,43 @@ export async function GET(request: NextRequest) {
 
   const apiKey = decrypt({ encrypted: config.encryptedApiKey, iv: config.iv, authTag: config.authTag });
   const client = new Anthropic({ apiKey, maxRetries: 0 });
+  const modelId = config.defaultModelId;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DIAGNOSTIC_TIMEOUT_MS);
-  const start = Date.now();
+  const [bare, structuredOutput, webSearchTool] = await Promise.all([
+    runCheck(async (signal) => {
+      const r = await client.messages.create(
+        { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "Say OK." }] },
+        { timeout: CHECK_TIMEOUT_MS, signal },
+      );
+      return r.content.find((b) => b.type === "text")?.text ?? "(no text)";
+    }),
+    runCheck(async (signal) => {
+      const r = await client.messages.parse(
+        {
+          model: modelId,
+          max_tokens: 500,
+          system: "You are a test.",
+          output_config: { format: zodOutputFormat(turnOutputSchema) },
+          messages: [{ role: "user", content: "Say something trivial and set readyToDecide to false." }],
+        },
+        { timeout: CHECK_TIMEOUT_MS, signal },
+      );
+      return r.parsed_output ? "parsed ok" : "parse failed";
+    }),
+    runCheck(async (signal) => {
+      const r = await client.messages.create(
+        {
+          model: modelId,
+          max_tokens: 200,
+          system: "You are a test.",
+          tools: [{ type: "web_search_20260318", name: "web_search", max_uses: 1, allowed_callers: ["direct"] }],
+          messages: [{ role: "user", content: "What is 2+2? Do not search, just answer." }],
+        },
+        { timeout: CHECK_TIMEOUT_MS, signal },
+      );
+      return r.content.find((b) => b.type === "text")?.text ?? "(no text)";
+    }),
+  ]);
 
-  try {
-    const response = await client.messages.create(
-      {
-        model: config.defaultModelId,
-        max_tokens: 10,
-        messages: [{ role: "user", content: "Say OK." }],
-      },
-      { timeout: DIAGNOSTIC_TIMEOUT_MS, signal: controller.signal },
-    );
-    clearTimeout(timer);
-    return NextResponse.json({
-      outcome: "success",
-      elapsedMs: Date.now() - start,
-      modelId: config.defaultModelId,
-      responseText: response.content.find((b) => b.type === "text")?.text ?? null,
-    });
-  } catch (err) {
-    clearTimeout(timer);
-    const elapsedMs = Date.now() - start;
-    const wasOurTimeout = controller.signal.aborted;
-    return NextResponse.json({
-      outcome: wasOurTimeout ? "silent_hang" : "distinct_error",
-      elapsedMs,
-      modelId: config.defaultModelId,
-      // wasOurTimeout=true: Anthropic's servers never responded at all
-      // within the timeout -- points at a network/egress problem, not
-      // an application-level rejection.
-      // wasOurTimeout=false: Anthropic's own servers actively rejected
-      // the request (fast enough that our timer never fired) -- points
-      // at auth, rate limiting, or a bad model id instead.
-      errorName: err instanceof Error ? err.name : typeof err,
-      errorMessage: err instanceof Error ? err.message : String(err),
-      errorCause:
-        err instanceof Error && err.cause instanceof Error
-          ? { name: err.cause.name, message: err.cause.message }
-          : undefined,
-    });
-  }
+  return NextResponse.json({ modelId, bare, structuredOutput, webSearchTool });
 }
