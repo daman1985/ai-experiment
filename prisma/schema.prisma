@@ -90,6 +90,17 @@ model Run {
   roundNumber           Int     @default(0)
   forcedVotePending     Boolean @default(false)
 
+  // Guards advanceRun against overlapping invocations -- the cron tick and
+  // an admin's "watch live" polling (see LiveWatchToggle) can otherwise
+  // race to take the same turn, paying for two LLM calls when only one
+  // turn gets recorded (the second loses on Turn's [runId, sequenceNumber]
+  // unique constraint). Claimed atomically at the top of advanceRun and
+  // released in a finally block; a lock older than STALE_LOCK_MS is
+  // treated as an abandoned lock from a crashed invocation and reclaimed
+  // rather than left stuck forever.
+  isAdvancing    Boolean   @default(false)
+  advancingSince DateTime?
+
   // Soft ceiling on total run spend, independent of each agent's own cap --
   // belt and suspenders in case per-agent tracking drifts. Compared against
   // sum(agent.spendUsd) + systemSpendUsd.

@@ -26,6 +26,41 @@ function toEncryptedPayload(config: ProviderConfig) {
   return { encrypted: config.encryptedApiKey, iv: config.iv, authTag: config.authTag };
 }
 
+// Generous relative to the route's own maxDuration (60s) -- long enough
+// that a genuinely in-flight call is never preempted, short enough that a
+// crashed invocation's lock doesn't stay stuck for the rest of the run.
+const STALE_LOCK_MS = 90_000;
+
+// One call = one turn (or one budget/consensus housekeeping step) for a
+// single run. Designed to be cheap and idempotent-ish to call repeatedly
+// -- it re-derives whose turn it is from stored turns each time rather
+// than trusting any other in-memory state. Two different callers can
+// legitimately race to advance the same run (the cron tick and an
+// admin's "watch live" polling both call this), so the actual work
+// happens under a claimed lock; a caller that loses the race gets a
+// harmless noop back instead of paying for a duplicate LLM call.
+export async function advanceRun(runId: string): Promise<AdvanceResult> {
+  const claimed = await prisma.run.updateMany({
+    where: {
+      id: runId,
+      status: "ACTIVE",
+      OR: [{ isAdvancing: false }, { advancingSince: { lt: new Date(Date.now() - STALE_LOCK_MS) } }],
+    },
+    data: { isAdvancing: true, advancingSince: new Date() },
+  });
+  if (claimed.count === 0) {
+    const run = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
+    if (!run) return { action: "noop", detail: "run not found" };
+    if (run.status !== "ACTIVE") return { action: "noop", detail: `run status is ${run.status}` };
+    return { action: "noop", detail: "already advancing (another call is in flight)" };
+  }
+  try {
+    return await advanceRunLocked(runId);
+  } finally {
+    await prisma.run.update({ where: { id: runId }, data: { isAdvancing: false } });
+  }
+}
+
 async function turnsSinceLastDecision(runId: string): Promise<number> {
   const lastDecision = await prisma.decision.findFirst({
     where: { runId },
@@ -53,11 +88,7 @@ async function fullTranscript(runId: string): Promise<TranscriptEntryForPrompt[]
   }));
 }
 
-// One call = one turn (or one budget/consensus housekeeping step) for a
-// single run. Designed to be cheap and idempotent-ish to call repeatedly
-// from a cron tick -- it re-derives whose turn it is from stored turns
-// each time rather than trusting any other in-memory state.
-export async function advanceRun(runId: string): Promise<AdvanceResult> {
+async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
   const run = await prisma.run.findUnique({
     where: { id: runId },
     include: { agents: { orderBy: { seatIndex: "asc" } } },

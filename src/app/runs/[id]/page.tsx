@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { LiveTranscript, NewItemFade } from "@/components/transcript/LiveTranscript";
+import { LiveWatchToggle } from "@/components/transcript/LiveWatchToggle";
 import { AgentAvatar } from "@/components/transcript/AgentAvatar";
 import { TurnStepper } from "@/components/transcript/TurnStepper";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
@@ -93,6 +94,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
             <span className="tabular-nums">
               {fmtUsd(totalSpend)} / {fmtUsd(Number(run.totalBudgetCapUsd))}
             </span>
+            {run.status === "ACTIVE" && <LiveWatchToggle runId={run.id} />}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {run.agents.map((a) => (
