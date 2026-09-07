@@ -192,8 +192,14 @@ export async function runRealPromptCheckAction(): Promise<void> {
       client.messages
         .parse(
           {
+            // 2000, not 50 -- the real turnOutputSchema needs room for a
+            // full JSON object (message, weaknessCritique, two confidence
+            // fields, several nullable fields, etc.); the first version
+            // of this check used 50 and got a JSON-truncation parse error
+            // that had nothing to do with the actual hang under
+            // investigation, just an under-provisioned check.
             model: modelId,
-            max_tokens: 50,
+            max_tokens: 2000,
             system: realSystemPrompt,
             output_config: { format: zodOutputFormat(turnOutputSchema) },
             messages: [{ role: "user", content: "Reply with a minimal valid turn: any message, any weaknessCritique, confidence 0.5, readyToDecide false." }],

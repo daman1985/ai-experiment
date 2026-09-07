@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { runRealPromptCheckAction, clearDiagnosticsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -82,14 +82,14 @@ export default async function DiagnosticsPage({
 
       <div className="flex flex-wrap items-start gap-2">
         <form action={runRealPromptCheckAction}>
-          <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
+          <SubmitButton variant="secondary" className="px-3 py-1 text-xs" pendingText="Running (up to ~20s)...">
             Run full diagnostic battery
-          </Button>
+          </SubmitButton>
         </form>
         <form action={clearDiagnosticsAction}>
-          <Button type="submit" variant="danger" className="px-3 py-1 text-xs">
+          <SubmitButton variant="danger" className="px-3 py-1 text-xs" pendingText="Clearing...">
             Clear log
-          </Button>
+          </SubmitButton>
         </form>
       </div>
       <p className="text-xs text-text-tertiary">
