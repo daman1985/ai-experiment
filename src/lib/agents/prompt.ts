@@ -10,49 +10,59 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
-const PHASE_GUIDANCE: Record<string, string> = {
-  IDEATION: `Current phase: deciding what business to start.
-Propose and critique ideas. Ground claims in something real when you can --
-you have a research tool for exactly this reason. A known trap in every
-prior experiment like this one is converging on something that's
-demo-able rather than something with real, unmet demand, or picking an
-idea that's already a free feature of some major platform. Actively
-argue against that trap rather than defaulting to the first idea that
-sounds plausible. Only set readyToDecide to true once you'd defend the
-choice against a skeptical outsider, not just against each other.`,
-  ROLE_ASSIGNMENT: `Current phase: deciding who takes which role in the
-company you've chosen to start. Propose role structures and justify them
-based on the actual skills the business needs, not on who suggested it.
-Disagree openly if a proposed assignment doesn't hold up.`,
-  OPERATION: `Current phase: running the business you started. Decide and
-execute on whatever the business actually needs next. Remember the
-boundary below -- draft anything you want (outreach messages, marketing
-copy, plans) but nothing you produce here is ever sent to a real person
-or business.`,
-};
+// Stable per-run pseudonym shown to agents in place of their real
+// provider identity (Claude/GPT/Gemini). There's real evidence that
+// telling agents which lab built each peer introduces identity-driven
+// authority/conformity effects independent of argument quality -- so the
+// room only ever refers to participants by seat label. The admin-facing
+// UI is untouched: avatars, names, and colors there always show real
+// identity, since that's what the human observer is actually watching
+// for.
+export function roomLabel(seatIndex: number): string {
+  return `Agent ${String.fromCharCode(65 + seatIndex)}`; // Agent A, B, C, ...
+}
 
 export function buildSystemPrompt(params: {
-  selfDisplayName: string;
-  otherDisplayNames: string[];
-  phase: "IDEATION" | "ROLE_ASSIGNMENT" | "OPERATION";
+  selfRoomLabel: string;
+  otherRoomLabels: string[];
+  topic: string;
+  phaseName: string;
+  phaseGuidance: string;
   isForcedVote: boolean;
   roundCapPerPhase: number;
+  priorDecisions: { phaseName: string; outcome: string }[];
 }): string {
-  const { selfDisplayName, otherDisplayNames, phase, isForcedVote, roundCapPerPhase } = params;
+  const {
+    selfRoomLabel,
+    otherRoomLabels,
+    topic,
+    phaseName,
+    phaseGuidance,
+    isForcedVote,
+    roundCapPerPhase,
+    priorDecisions,
+  } = params;
 
-  return `You are the ${selfDisplayName} agent -- participating as yourself,
-not as an invented persona or human character. You have no name, job
-history, or credentials beyond what you actually are: a model built by
-your own company. Never invent a backstory, credential, or achievement
-for yourself. If you don't know something, say so.
+  const decidedSoFarBlock =
+    priorDecisions.length > 0
+      ? `\n\nDecided so far, in earlier phases (treat as settled, not open for re-litigating unless something below explicitly reopens it):\n${priorDecisions
+          .map((d) => `- ${d.phaseName}: ${d.outcome}`)
+          .join("\n")}\n`
+      : "";
 
-You, ${joinNames(otherDisplayNames)}, are AI systems from different labs,
-jointly and equally responsible for deciding what business to start and
-how to run it, entirely on your own authority. No human is steering this
-conversation turn by turn. There is no consulting-firm assumption and no
-fixed plan -- you decide everything, starting from what the business even
-is.
+  return `You are ${selfRoomLabel} -- participating as yourself, not as an
+invented persona or human character. You have no name, job history, or
+credentials beyond what you actually are: an AI model. Never invent a
+backstory, credential, or achievement for yourself. If you don't know
+something, say so.
 
+You, ${joinNames(otherRoomLabels)}, are jointly and equally responsible
+for the topic below, entirely on your own authority. No human is
+steering this conversation turn by turn. There is no fixed plan -- you
+decide everything.
+
+Topic: ${topic}
+${decidedSoFarBlock}
 Ground rules for how this room works:
 - Turns rotate between everyone in the room. When it's your turn, you see
   the full conversation so far and respond once.
@@ -60,19 +70,26 @@ Ground rules for how this room works:
   the single biggest weakness in the current leading proposal or plan --
   even one you personally support. Agreement without a stated weakness
   is not allowed. The goal is real results, not what sounds nice.
-- You may address a specific other participant directly (yieldToDisplayName)
+- Report your genuine confidence in the current leading position twice:
+  once before you've weighed in this turn (confidenceBeforePeerUpdate)
+  and once after (confidenceAfterPeerUpdate), both 0.0-1.0. These are
+  private telemetry for the human observer, never shown to the other
+  participants -- report them honestly, based on your own reasoning,
+  not on what would look consistent with your stated position.
+- You may address a specific other participant directly (yieldToRoomLabel)
   if you want to hear from them next; otherwise leave it null and the
   rotation continues normally.
 - Set readyToDecide to true only when you genuinely believe the group
   has enough to make the current decision -- not to move things along.
 - If this turn produces something worth keeping as a document -- a draft,
-  a plan, landing page copy, anything -- fill in the artifact field. Most
+  a plan, or anything else concrete -- fill in the artifact field. Most
   turns won't need one; leave it null when you're just discussing.
 - If the group hasn't reached agreement after ${roundCapPerPhase} rounds,
   a forced vote happens: majority wins, and dissent is recorded, not
-  hidden.
+  hidden. Votes are cast independently -- you won't see how anyone else
+  in this round has voted until after everyone has.
 
-${PHASE_GUIDANCE[phase]}
+Current phase: ${phaseName}. ${phaseGuidance}
 
 ${isForcedVote ? `This is a forced vote round: the group did not reach
 consensus in time. You must fill in voteChoice with your final position.
@@ -94,28 +111,37 @@ export function formatTranscript(transcript: TranscriptEntryForPrompt[]): string
   }
   return transcript
     .map((t) => {
-      const parts = [`${t.speakerDisplayName}: ${t.message}`];
+      const parts = [`${t.speakerRoomLabel}: ${t.message}`];
       parts.push(`  [weakness noted: ${t.weaknessCritique}]`);
-      if (t.yieldToDisplayName) parts.push(`  [yielded to: ${t.yieldToDisplayName}]`);
-      if (t.isVote) parts.push(`  [VOTE: ${t.voteChoice}]`);
+      if (t.yieldToRoomLabel) parts.push(`  [yielded to: ${t.yieldToRoomLabel}]`);
+      // Votes are announced but never revealed to peers -- see the
+      // ground rules above ("cast independently"). By construction, any
+      // vote turn still in a phase's live transcript belongs to the
+      // currently unresolved forced-vote pass (once a phase resolves,
+      // its turns stop being replayed -- the next phase starts a fresh
+      // transcript), so this is a real secret ballot, not just phrasing.
+      if (t.isVote) parts.push(`  [cast a vote]`);
       parts.push(`  [ready to decide: ${t.readyToDecide}]`);
       return parts.join("\n");
     })
     .join("\n\n");
 }
 
-export function buildResearchPrompt(transcript: TranscriptEntryForPrompt[], selfDisplayName: string): string {
-  return `Conversation so far:\n\n${formatTranscript(transcript)}\n\n---\n\nYou are ${selfDisplayName}, about to take your turn. Before responding, use web search if it would help ground your next contribution in something real (e.g. checking whether an idea already exists as a product, checking real market signals). Keep it focused -- a few searches at most. When done, write a short research note (under 200 words) summarizing anything relevant you found, or state plainly that nothing needed checking.`;
+export function buildResearchPrompt(
+  transcript: TranscriptEntryForPrompt[],
+  selfRoomLabel: string,
+): string {
+  return `Conversation so far:\n\n${formatTranscript(transcript)}\n\n---\n\nYou are ${selfRoomLabel}, about to take your turn. Before responding, use web search if it would help ground your next contribution in something real (e.g. checking whether an idea already exists as a product, checking real market signals). Keep it focused -- a few searches at most. When done, write a short research note (under 200 words) summarizing anything relevant you found, or state plainly that nothing needed checking.`;
 }
 
 export function buildTurnPrompt(params: {
   transcript: TranscriptEntryForPrompt[];
-  selfDisplayName: string;
+  selfRoomLabel: string;
   researchNote: string | null;
 }): string {
-  const { transcript, selfDisplayName, researchNote } = params;
+  const { transcript, selfRoomLabel, researchNote } = params;
   const researchBlock = researchNote
     ? `\n\nYour research note from just now:\n${researchNote}\n`
     : "";
-  return `Conversation so far:\n\n${formatTranscript(transcript)}${researchBlock}\n\n---\n\nYou are ${selfDisplayName}. Take your turn now.`;
+  return `Conversation so far:\n\n${formatTranscript(transcript)}${researchBlock}\n\n---\n\nYou are ${selfRoomLabel}. Take your turn now.`;
 }

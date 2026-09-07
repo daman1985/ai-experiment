@@ -59,7 +59,9 @@ export function TurnRow({
               )}
             </span>
             <span className="tabular-nums text-xs text-text-tertiary">
-              round {turn.roundNumber + 1} &middot; {fmtUsd(Number(turn.costUsd))}
+              round {turn.roundNumber + 1} &middot; confidence{" "}
+              {turn.confidenceBeforePeerUpdate.toFixed(2)}&rarr;
+              {turn.confidenceAfterPeerUpdate.toFixed(2)} &middot; {fmtUsd(Number(turn.costUsd))}
             </span>
           </div>
 

@@ -12,24 +12,34 @@ export interface ProviderRegistryEntry {
   modelHint: string;
 }
 
+// Model hints reflect the roster from the September 2026 model-selection
+// research pass (two independent deep-research reports plus the admin's
+// own manually-fetched pricing pages, cross-checked against each other --
+// see conversation history / docs/design-system.md): claude-sonnet-5 /
+// gpt-5.6-terra / gemini-3.8-flash, chosen for being roughly
+// capability-matched across providers (not just price-matched) while
+// staying safely inside the 60s serverless timeout. Still just a
+// starting hint, not enforced -- confirm current pricing at the URL
+// below before saving, since rate cards change often.
 export const PROVIDER_REGISTRY: ProviderRegistryEntry[] = [
   {
     id: "ANTHROPIC",
     displayName: "Claude",
     pricingUrl: "https://platform.claude.com/docs/en/about-claude/pricing",
-    modelHint: "e.g. claude-haiku-4-5",
+    modelHint: "e.g. claude-sonnet-5 ($2/$10 per MTok, confirmed live Sept 2026)",
   },
   {
     id: "OPENAI",
     displayName: "GPT",
-    pricingUrl: "https://platform.openai.com/docs/pricing",
-    modelHint: "e.g. gpt-4o-mini -- confirm the current cheapest model in the OpenAI console",
+    pricingUrl: "https://developers.openai.com/api/docs/pricing",
+    modelHint: "e.g. gpt-5.6-terra ($2/$12 per MTok, confirmed live Sept 2026)",
   },
   {
     id: "GOOGLE",
     displayName: "Gemini",
     pricingUrl: "https://ai.google.dev/gemini-api/docs/pricing",
-    modelHint: "e.g. gemini-2.5-flash -- confirm the current cheapest model in AI Studio",
+    modelHint:
+      "e.g. gemini-3.8-flash ($0.75/$3.75 per MTok through Dec 31 2026, then $1.50/$7.50 -- confirmed live Sept 2026)",
   },
 ];
 

@@ -8,8 +8,7 @@ import { DecisionBreak } from "@/components/transcript/DecisionBreak";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
 import { AGENT_STYLES } from "@/lib/agents/agentColor";
-import { formatPhase, fmtUsd, runStatusVariant } from "@/lib/format";
-import type { Phase } from "@prisma/client";
+import { fmtUsd, runStatusVariant } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +19,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
     where: { id },
     include: {
       agents: { orderBy: { seatIndex: "asc" } },
+      phases: { orderBy: { orderIndex: "asc" } },
       turns: {
         orderBy: { sequenceNumber: "asc" },
         include: { agent: true, yieldToAgent: true, artifacts: true },
@@ -30,15 +30,22 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
   });
   if (!run) notFound();
 
+  const phasesById = new Map(run.phases.map((p) => [p.id, p]));
+  const currentPhase = run.phases.find((p) => p.orderIndex === run.currentPhaseIndex) ?? null;
+
   const totalSpend =
     run.agents.reduce((sum, a) => sum + Number(a.spendUsd), 0) + Number(run.systemSpendUsd);
 
   const activeAgents = run.agents.filter((a) => a.isActive);
   let currentAgentId: string | null = null;
-  if ((run.status === "ACTIVE" || run.status === "PAUSED") && activeAgents.length >= 2) {
-    const turnsInPhase = run.turns.filter((t) => t.phase === run.currentPhase).length;
-    currentAgentId =
-      run.pendingYieldToAgentId ?? activeAgents[turnsInPhase % activeAgents.length].id;
+  if ((run.status === "ACTIVE" || run.status === "PAUSED") && currentPhase && activeAgents.length >= 2) {
+    const turnsInPhase = run.turns.filter((t) => t.phaseId === currentPhase.id).length;
+    // Mirrors the rotating-first-speaker formula in lib/agents/engine.ts
+    // exactly, so the stepper never drifts from what the next cron tick
+    // will actually do.
+    const roundNumberForTurn = Math.floor(turnsInPhase / activeAgents.length);
+    const speakerIndex = (turnsInPhase + roundNumberForTurn) % activeAgents.length;
+    currentAgentId = run.pendingYieldToAgentId ?? activeAgents[speakerIndex].id;
   }
 
   const agentNameById = new Map(run.agents.map((a) => [a.id, a.displayName]));
@@ -54,14 +61,14 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
     ...run.decisions.map((d): FeedItem => ({ kind: "decision", at: d.decidedAt, decision: d })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
-  const artifactsByPhase = new Map<Phase, typeof run.artifacts>();
+  const artifactsByPhaseId = new Map<string, typeof run.artifacts>();
   for (const artifact of run.artifacts) {
-    const list = artifactsByPhase.get(artifact.phase) ?? [];
+    const list = artifactsByPhaseId.get(artifact.phaseId) ?? [];
     list.push(artifact);
-    artifactsByPhase.set(artifact.phase, list);
+    artifactsByPhaseId.set(artifact.phaseId, list);
   }
 
-  let lastPhase: Phase | null = null;
+  let lastPhaseId: string | null = null;
 
   // Plain, serializable metadata for LiveTranscript to diff between polls
   // -- Turn/Decision carry Prisma Decimal fields that can't cross the
@@ -89,9 +96,10 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
             <h1 className="font-serif text-2xl text-text-primary">{run.name ?? "Untitled run"}</h1>
             <TurnStepper agents={activeAgents} currentAgentId={currentAgentId} />
           </div>
+          <p className="text-sm text-text-secondary">{run.topic}</p>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text-secondary">
             <Badge variant={runStatusVariant(run.status)}>{run.status}</Badge>
-            <span>{formatPhase(run.currentPhase)}</span>
+            {currentPhase && <span>{currentPhase.name}</span>}
             <span className="tabular-nums">
               {fmtUsd(totalSpend)} / {fmtUsd(Number(run.totalBudgetCapUsd))}
             </span>
@@ -120,9 +128,9 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               <p className="text-sm text-text-tertiary">No turns yet — start the run to begin.</p>
             )}
             {feed.map((item, index) => {
-              const phase = item.kind === "turn" ? item.turn.phase : item.decision.phase;
-              const showPhaseHeader = phase !== lastPhase;
-              lastPhase = phase;
+              const phaseId = item.kind === "turn" ? item.turn.phaseId : item.decision.phaseId;
+              const showPhaseHeader = phaseId !== lastPhaseId;
+              lastPhaseId = phaseId;
               const key = item.kind === "turn" ? item.turn.id : item.decision.id;
               // Roving tabindex + the ARIA "feed" pattern's aria-posinset/
               // aria-setsize -- see docs/design-system.md, "Long-transcript
@@ -134,7 +142,9 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               const tabIndex = index === 0 ? 0 : -1;
               return (
                 <div key={key}>
-                  {showPhaseHeader && <PhaseDivider phase={phase} />}
+                  {showPhaseHeader && (
+                    <PhaseDivider phaseName={phasesById.get(phaseId)?.name ?? "Untitled phase"} />
+                  )}
                   <NewItemFade>
                     {item.kind === "turn" ? (
                       <TurnRow
@@ -162,10 +172,10 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
         {run.artifacts.length > 0 && (
           <section className="mt-10 space-y-6" aria-label="Artifacts">
             <h2 className="font-serif text-lg text-text-primary">Artifacts</h2>
-            {[...artifactsByPhase.entries()].map(([phase, items]) => (
-              <div key={phase} className="space-y-2">
+            {[...artifactsByPhaseId.entries()].map(([phaseId, items]) => (
+              <div key={phaseId} className="space-y-2">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
-                  {formatPhase(phase)}
+                  {phasesById.get(phaseId)?.name ?? "Untitled phase"}
                 </h3>
                 {items.map((a) => (
                   <details key={a.id} className="rounded-md border border-border bg-surface px-3 py-2">

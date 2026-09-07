@@ -385,6 +385,81 @@ subjective-direction calls squarely in "ours to invent" territory, so
 they're recorded here for the admin to weigh in on rather than acted on
 unilaterally.
 
+**Topic generalization + anti-sycophancy protocol upgrade done.** Mostly
+architecture/engine work, not visual design, but touches enough UI to
+log here:
+
+- The fixed `IDEATION`/`ROLE_ASSIGNMENT`/`OPERATION` enum is gone,
+  replaced by an admin-defined, ordered `RunPhase` list per run (name,
+  guidance text, round cap, and two opt-in flags: `assignsRoles`,
+  `allowsResearch`). The Dashboard's New Run form now asks for a
+  `topic` (free text — what the room actually discusses, previously
+  hardcoded to "start a business") plus up to 5 phase slots, pre-filled
+  with the original business-founding template as an editable default
+  rather than the only option. A phase with no name is skipped. The run
+  viewer's phase header/divider/artifact grouping now read the phase's
+  real `name` directly instead of a formatted enum value.
+  A single-phase topic (e.g. a plain debate with no "execute" stage)
+  now has a real completion path — `advanceToNextPhase` marks the run
+  `COMPLETED` when there's no next phase, instead of the old behavior
+  where the last phase never resolved to anything and just ran until
+  the budget ran out.
+- Cross-run isolation was verified, not just assumed: read every
+  provider adapter and the prompt builder directly — all three API
+  calls are stateless per turn, context comes only from that run's own
+  stored turns, and no conversation/thread/session object is used
+  anywhere. Nothing needed to change here; already true by construction.
+- Anti-sycophancy protocol changes, sourced from the September 2026
+  model-selection research pass: agents now address each other by a
+  per-run pseudonym (`Agent A`/`B`/`C`, from seat index) instead of
+  their real provider identity — evidence suggests revealing which lab
+  built a peer introduces identity-driven authority/conformity effects
+  independent of argument quality. The admin-facing UI is completely
+  unaffected — avatars, names, and colors everywhere still show real
+  identity, since that's what the human observer is actually watching
+  for. Turns now also carry `confidenceBeforePeerUpdate`/
+  `confidenceAfterPeerUpdate` (0.0-1.0, self-reported, never replayed
+  back into peer context so it can't become something to conform on) —
+  shown in `TurnRow`'s metadata line as `confidence 0.55→0.70`, and
+  intended as the substrate for a future decision-map view that can
+  distinguish independent judgment from peer-driven conformity. Votes
+  cast during a forced-vote round are no longer shown to other agents
+  in the same round (`formatTranscript` announces "[cast a vote]"
+  without the choice) — a real secret ballot, not just phrasing, since
+  a phase's transcript never survives past its own resolution. The
+  starting speaker also now rotates by round rather than always being
+  seat 0, removing a permanent first-mover anchoring advantage.
+- Model roster updated to `claude-sonnet-5` / `gpt-5.6-terra` /
+  `gemini-3.8-flash` (`providerRegistry.ts` model hints and pricing
+  URLs), the roster both September 2026 research reports converged on
+  independently despite disagreeing on some specifics. Verified
+  directly rather than trusting either report: fetched Anthropic's
+  pricing page myself (Sonnet 5 confirmed $2/$10), and the admin
+  independently fetched OpenAI's and Google's current pricing pages,
+  which resolved the one real contradiction between the two reports —
+  Gemini 3.8 Flash is $0.75/$3.75 through Dec 31 2026 (one report's
+  number), not $1.50/$7.50 "currently" (the other report's number,
+  which turned out to be the *post*-promotional 2027 rate). OpenAI's
+  adapter migrated off the legacy `web_search_preview` tool to the
+  current `web_search` tool to match. Anthropic's adapter now caps
+  research to one direct search (`max_uses: 1`, `allowed_callers:
+  ["direct"]`) per the research's 60-second-timeout latency guidance.
+  Still unverified either way (blocked network egress on both sides of
+  this conversation): whether `gemini-3.8-flash` can combine
+  `googleSearch` and `responseSchema` in one call — `gemini.ts` keeps
+  its conservative two-call path until that's tested against a real
+  key.
+
+Verified with tsc, a full build, and direct DB/UI testing on local dev:
+created a real run through the rebuilt form with a non-business topic,
+confirmed the three phases and their flags landed correctly, then
+inserted synthetic turns/a decision/an artifact spanning two phases via
+psql to confirm phase-based grouping, the decision break, the confidence
+display, and the artifact backlink all render correctly against real
+(if synthetic) data. Not yet verified: an actual live turn against a
+real provider key, since none are configured yet — that's the next real
+test once the admin adds keys.
+
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
 2/4/8/12/16/24/32/40/48px) and duration scale (100/150/200ms) already

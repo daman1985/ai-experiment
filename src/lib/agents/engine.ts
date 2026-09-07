@@ -1,14 +1,14 @@
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { getProviderAdapter, computeCostUsd } from "./index";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, roomLabel } from "./prompt";
 import {
   extractConsensusOutcome,
   extractRoleAssignment,
   extractVoteTally,
 } from "./decisionExtraction";
 import type { TranscriptEntryForPrompt } from "./schema";
-import type { Agent, Phase, Prisma, ProviderConfig } from "@prisma/client";
+import type { Agent, Prisma, ProviderConfig, RunPhase } from "@prisma/client";
 
 export interface AdvanceResult {
   action:
@@ -32,10 +32,15 @@ function toEncryptedPayload(config: ProviderConfig) {
 export async function advanceRun(runId: string): Promise<AdvanceResult> {
   const run = await prisma.run.findUnique({
     where: { id: runId },
-    include: { agents: { orderBy: { seatIndex: "asc" } } },
+    include: { agents: { orderBy: { seatIndex: "asc" } }, phases: { orderBy: { orderIndex: "asc" } } },
   });
   if (!run) return { action: "noop", detail: "run not found" };
   if (run.status !== "ACTIVE") return { action: "noop", detail: `run status is ${run.status}` };
+
+  const currentPhase = run.phases.find((p) => p.orderIndex === run.currentPhaseIndex);
+  if (!currentPhase) {
+    return { action: "error", detail: `Run has no phase at index ${run.currentPhaseIndex}.` };
+  }
 
   const providerConfigs = await prisma.providerConfig.findMany();
   const configByProvider = new Map(providerConfigs.map((c) => [c.provider, c]));
@@ -60,9 +65,15 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
   }
 
   const turnsSoFarInPhase = await prisma.turn.count({
-    where: { runId: run.id, phase: run.currentPhase },
+    where: { phaseId: currentPhase.id },
   });
-  const normalSpeaker = activeAgents[turnsSoFarInPhase % activeAgents.length];
+  // The starting seat rotates by round (rather than always seat 0) so no
+  // single agent gets a permanent first-mover/anchoring advantage across
+  // an entire phase -- see docs/design-system.md and the September 2026
+  // model-selection research on debate anchoring.
+  const roundNumberForTurn = Math.floor(turnsSoFarInPhase / activeAgents.length);
+  const normalSpeakerIndex = (turnsSoFarInPhase + roundNumberForTurn) % activeAgents.length;
+  const normalSpeaker = activeAgents[normalSpeakerIndex];
 
   let speaker = normalSpeaker;
   if (run.pendingYieldToAgentId) {
@@ -88,32 +99,46 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
   const apiKey = decrypt(toEncryptedPayload(config));
 
   const priorTurns = await prisma.turn.findMany({
-    where: { runId: run.id, phase: run.currentPhase },
+    where: { phaseId: currentPhase.id },
     orderBy: { sequenceNumber: "asc" },
     include: { agent: true, yieldToAgent: true },
   });
   const transcript: TranscriptEntryForPrompt[] = priorTurns.map((t) => ({
-    speakerDisplayName: t.agent.displayName,
+    speakerRoomLabel: roomLabel(t.agent.seatIndex),
     message: t.message,
     weaknessCritique: t.weaknessCritique,
     readyToDecide: t.readyToDecide,
-    yieldToDisplayName: t.yieldToAgent?.displayName ?? null,
+    yieldToRoomLabel: t.yieldToAgent ? roomLabel(t.yieldToAgent.seatIndex) : null,
     isVote: t.isVote,
     voteChoice: t.voteChoice,
   }));
 
-  const otherDisplayNames = activeAgents
+  const priorDecisionRows = await prisma.decision.findMany({
+    where: { runId: run.id },
+    orderBy: { decidedAt: "asc" },
+    include: { phase: true },
+  });
+  const priorDecisions = priorDecisionRows.map((d) => ({
+    phaseName: d.phase.name,
+    outcome: d.outcome,
+  }));
+
+  const selfRoomLabel = roomLabel(speaker.seatIndex);
+  const otherRoomLabels = activeAgents
     .filter((a) => a.id !== speaker.id)
-    .map((a) => a.displayName);
+    .map((a) => roomLabel(a.seatIndex));
   const isForcedVote = run.forcedVotePending;
-  const enableResearch = run.currentPhase !== "OPERATION" || isForcedVote;
+  const enableResearch = currentPhase.allowsResearch || isForcedVote;
 
   const systemPrompt = buildSystemPrompt({
-    selfDisplayName: speaker.displayName,
-    otherDisplayNames,
-    phase: run.currentPhase,
+    selfRoomLabel,
+    otherRoomLabels,
+    topic: run.topic,
+    phaseName: currentPhase.name,
+    phaseGuidance: currentPhase.guidance,
     isForcedVote,
-    roundCapPerPhase: run.roundCapPerPhase,
+    roundCapPerPhase: currentPhase.roundCapPerPhase,
+    priorDecisions,
   });
 
   const adapter = getProviderAdapter(speaker.provider);
@@ -122,8 +147,8 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
     modelId: speaker.modelId,
     systemPrompt,
     transcript,
-    selfDisplayName: speaker.displayName,
-    otherDisplayNames,
+    selfRoomLabel,
+    otherRoomLabels,
     enableResearch,
     isForcedVote,
   });
@@ -135,13 +160,12 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
     outputPricePerMillion: Number(config.outputPricePerMillion),
   });
 
-  const yieldTargetAgent = result.output.yieldToDisplayName
+  const yieldTargetAgent = result.output.yieldToRoomLabel
     ? activeAgents.find(
-        (a) => a.displayName === result.output.yieldToDisplayName && a.id !== speaker.id,
+        (a) => roomLabel(a.seatIndex) === result.output.yieldToRoomLabel && a.id !== speaker.id,
       )
     : undefined;
 
-  const roundNumberForTurn = Math.floor(turnsSoFarInPhase / activeAgents.length);
   const maxSeq = await prisma.turn.aggregate({
     where: { runId: run.id },
     _max: { sequenceNumber: true },
@@ -153,11 +177,13 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
       data: {
         runId: run.id,
         agentId: speaker.id,
-        phase: run.currentPhase,
+        phaseId: currentPhase.id,
         roundNumber: roundNumberForTurn,
         sequenceNumber: nextSequenceNumber,
         message: result.output.message,
         weaknessCritique: result.output.weaknessCritique,
+        confidenceBeforePeerUpdate: result.output.confidenceBeforePeerUpdate,
+        confidenceAfterPeerUpdate: result.output.confidenceAfterPeerUpdate,
         readyToDecide: result.output.readyToDecide,
         yieldToAgentId: yieldTargetAgent?.id ?? null,
         isVote: isForcedVote,
@@ -181,7 +207,7 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
       await tx.artifact.create({
         data: {
           runId: run.id,
-          phase: run.currentPhase,
+          phaseId: currentPhase.id,
           type: result.output.artifact.type,
           title: result.output.artifact.title,
           content: result.output.artifact.content,
@@ -210,34 +236,27 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
   ).filter((a) => a.isActive);
 
   if (isForcedVote) {
-    return handleForcedVoteTurn(run.id, run.currentPhase, activeAgents, configByProvider, speaker);
+    return handleForcedVoteTurn(run.id, currentPhase, activeAgents, configByProvider, speaker);
   }
 
-  if (run.currentPhase === "IDEATION" || run.currentPhase === "ROLE_ASSIGNMENT") {
-    const consensusResult = await checkConsensus(
-      run.id,
-      run.currentPhase,
-      activeAgents,
-      configByProvider,
-    );
-    if (consensusResult) return consensusResult;
+  const consensusResult = await checkConsensus(run.id, currentPhase, activeAgents, configByProvider);
+  if (consensusResult) return consensusResult;
 
-    const turnsInPhaseNow = turnsSoFarInPhase + 1;
-    if (turnsInPhaseNow >= run.roundCapPerPhase * activeAgents.length) {
-      await prisma.run.update({ where: { id: run.id }, data: { forcedVotePending: true } });
-      return {
-        action: "turn_taken",
-        detail: `${speaker.displayName} spoke; round cap reached, next round is a forced vote`,
-      };
-    }
+  const turnsInPhaseNow = turnsSoFarInPhase + 1;
+  if (turnsInPhaseNow >= currentPhase.roundCapPerPhase * activeAgents.length) {
+    await prisma.run.update({ where: { id: run.id }, data: { forcedVotePending: true } });
+    return {
+      action: "turn_taken",
+      detail: `${speaker.displayName} spoke; round cap reached, next round is a forced vote`,
+    };
   }
 
   return { action: "turn_taken", detail: `${speaker.displayName} spoke` };
 }
 
-async function latestReadyStateByAgent(runId: string, phase: Phase, activeAgents: Agent[]) {
+async function latestReadyStateByAgent(phaseId: string, activeAgents: Agent[]) {
   const recent = await prisma.turn.findMany({
-    where: { runId, phase, isVote: false },
+    where: { phaseId, isVote: false },
     orderBy: { sequenceNumber: "desc" },
     take: activeAgents.length * 2,
   });
@@ -250,11 +269,11 @@ async function latestReadyStateByAgent(runId: string, phase: Phase, activeAgents
 
 async function checkConsensus(
   runId: string,
-  phase: Phase,
+  phase: RunPhase,
   activeAgents: Agent[],
   configByProvider: Map<string, ProviderConfig>,
 ): Promise<AdvanceResult | null> {
-  const latest = await latestReadyStateByAgent(runId, phase, activeAgents);
+  const latest = await latestReadyStateByAgent(phase.id, activeAgents);
   const allReady = activeAgents.every((a) => latest.get(a.id) === true);
   if (!allReady) return null;
 
@@ -268,58 +287,59 @@ async function checkConsensus(
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
 
   const priorTurns = await prisma.turn.findMany({
-    where: { runId, phase },
+    where: { phaseId: phase.id },
     orderBy: { sequenceNumber: "asc" },
     include: { agent: true, yieldToAgent: true },
   });
   const transcript: TranscriptEntryForPrompt[] = priorTurns.map((t) => ({
-    speakerDisplayName: t.agent.displayName,
+    speakerRoomLabel: roomLabel(t.agent.seatIndex),
     message: t.message,
     weaknessCritique: t.weaknessCritique,
     readyToDecide: t.readyToDecide,
-    yieldToDisplayName: t.yieldToAgent?.displayName ?? null,
+    yieldToRoomLabel: t.yieldToAgent ? roomLabel(t.yieldToAgent.seatIndex) : null,
     isVote: t.isVote,
     voteChoice: t.voteChoice,
   }));
 
-  if (phase === "IDEATION") {
-    const extraction = await extractConsensusOutcome(anthropicKey, transcript);
+  if (phase.assignsRoles) {
+    const extraction = await extractRoleAssignment(anthropicKey, transcript);
     await recordSystemCost(runId, extraction, anthropicConfig);
     await prisma.decision.create({
-      data: { runId, phase, outcome: extraction.result.outcome, method: "CONSENSUS" },
+      data: { runId, phaseId: phase.id, outcome: extraction.result.outcome, method: "CONSENSUS" },
     });
-    await advanceToNextPhase(runId, "IDEATION");
-    return { action: "phase_resolved", detail: "Business idea decided by consensus." };
+    for (const roleAssignment of extraction.result.roles) {
+      const agent = activeAgents.find(
+        (a) => roomLabel(a.seatIndex) === roleAssignment.agentRoomLabel,
+      );
+      if (agent) {
+        await prisma.agent.update({
+          where: { id: agent.id },
+          data: { assignedRole: roleAssignment.role },
+        });
+      }
+    }
+    await advanceToNextPhase(runId, phase);
+    return { action: "phase_resolved", detail: `${phase.name} resolved by consensus (roles assigned).` };
   }
 
-  // ROLE_ASSIGNMENT
-  const extraction = await extractRoleAssignment(anthropicKey, transcript);
+  const extraction = await extractConsensusOutcome(anthropicKey, transcript);
   await recordSystemCost(runId, extraction, anthropicConfig);
   await prisma.decision.create({
-    data: { runId, phase, outcome: extraction.result.outcome, method: "CONSENSUS" },
+    data: { runId, phaseId: phase.id, outcome: extraction.result.outcome, method: "CONSENSUS" },
   });
-  for (const roleAssignment of extraction.result.roles) {
-    const agent = activeAgents.find((a) => a.displayName === roleAssignment.agentDisplayName);
-    if (agent) {
-      await prisma.agent.update({
-        where: { id: agent.id },
-        data: { assignedRole: roleAssignment.role },
-      });
-    }
-  }
-  await advanceToNextPhase(runId, "ROLE_ASSIGNMENT");
-  return { action: "phase_resolved", detail: "Roles decided by consensus." };
+  await advanceToNextPhase(runId, phase);
+  return { action: "phase_resolved", detail: `${phase.name} resolved by consensus.` };
 }
 
 async function handleForcedVoteTurn(
   runId: string,
-  phase: Phase,
+  phase: RunPhase,
   activeAgents: Agent[],
   configByProvider: Map<string, ProviderConfig>,
   speaker: Agent,
 ): Promise<AdvanceResult> {
   const recentVotes = await prisma.turn.findMany({
-    where: { runId, phase, isVote: true },
+    where: { phaseId: phase.id, isVote: true },
     orderBy: { sequenceNumber: "desc" },
     take: activeAgents.length * 2,
     include: { agent: true },
@@ -356,20 +376,20 @@ async function handleForcedVoteTurn(
   await prisma.decision.create({
     data: {
       runId,
-      phase,
+      phaseId: phase.id,
       outcome: tally.result.outcome,
       method: "MAJORITY_VOTE",
       dissent: tally.result.dissent,
     },
   });
 
-  // Known v1 limitation: a forced vote on ROLE_ASSIGNMENT records the
-  // winning outcome as text but does not attempt to parse it back into
-  // per-agent assignedRole fields the way the consensus path does --
+  // Known v1 limitation: a forced vote on a role-assigning phase records
+  // the winning outcome as text but does not attempt to parse it back
+  // into per-agent assignedRole fields the way the consensus path does --
   // deadlock lasting the full round cap is the rare case, and the
   // structured-vote-with-roles parsing isn't worth building for it yet.
   await advanceToNextPhase(runId, phase);
-  return { action: "phase_resolved", detail: `${phase} resolved by forced majority vote.` };
+  return { action: "phase_resolved", detail: `${phase.name} resolved by forced majority vote.` };
 }
 
 async function recordSystemCost(
@@ -386,10 +406,37 @@ async function recordSystemCost(
   await prisma.run.update({ where: { id: runId }, data: { systemSpendUsd: { increment: cost } } });
 }
 
-async function advanceToNextPhase(runId: string, resolvedPhase: Phase) {
-  const nextPhase: Phase = resolvedPhase === "IDEATION" ? "ROLE_ASSIGNMENT" : "OPERATION";
+async function advanceToNextPhase(runId: string, resolvedPhase: RunPhase) {
+  const nextPhase = await prisma.runPhase.findUnique({
+    where: { runId_orderIndex: { runId, orderIndex: resolvedPhase.orderIndex + 1 } },
+  });
+
+  if (nextPhase) {
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        currentPhaseIndex: nextPhase.orderIndex,
+        forcedVotePending: false,
+        pendingYieldToAgentId: null,
+        roundNumber: 0,
+      },
+    });
+    return;
+  }
+
+  // No phase after this one -- the room has resolved everything it was
+  // asked to. Previously the last (open-ended "operate") phase never
+  // reached this path at all and just ran until the budget ran out; now
+  // that phases are admin-defined rather than a fixed enum, a
+  // single-phase topic (e.g. a plain debate with no "execute" stage)
+  // needs a real completion path, not an unreachable status.
   await prisma.run.update({
     where: { id: runId },
-    data: { currentPhase: nextPhase, forcedVotePending: false, pendingYieldToAgentId: null, roundNumber: 0 },
+    data: {
+      status: "COMPLETED",
+      endedAt: new Date(),
+      forcedVotePending: false,
+      pendingYieldToAgentId: null,
+    },
   });
 }

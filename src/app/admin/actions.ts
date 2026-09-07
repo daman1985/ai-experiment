@@ -72,20 +72,51 @@ export async function saveProviderConfigAction(formData: FormData) {
   revalidatePath("/admin/settings");
 }
 
+const MAX_PHASE_SLOTS = 5;
+
 export async function createRunAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim() || null;
+  const topic = String(formData.get("topic") ?? "").trim();
   const perAgentBudget = Number(formData.get("perAgentBudget"));
   const totalBudget = Number(formData.get("totalBudget"));
-  const roundCapPerPhase = Number(formData.get("roundCapPerPhase"));
   const selectedProviders = formData.getAll("providers") as Provider[];
 
-  if (![perAgentBudget, totalBudget, roundCapPerPhase].every(Number.isFinite)) {
-    throw new Error("Budget and round cap fields must be numbers.");
+  if (!topic) {
+    throw new Error("A topic is required -- it's what the room actually discusses.");
+  }
+  if (![perAgentBudget, totalBudget].every(Number.isFinite)) {
+    throw new Error("Budget fields must be numbers.");
   }
   if (selectedProviders.length < 2) {
     throw new Error(
       "Pick at least 2 providers -- the room mechanic (rotation, votes) needs more than one perspective.",
     );
+  }
+
+  // Fixed set of phase slots in the form rather than a fully dynamic
+  // add/remove list -- a phase with no name is treated as unused and
+  // skipped, so the admin can fill in as few or as many as the topic
+  // needs (up to MAX_PHASE_SLOTS) without needing client-side state.
+  const phases = [];
+  for (let i = 1; i <= MAX_PHASE_SLOTS; i++) {
+    const phaseName = String(formData.get(`phase${i}Name`) ?? "").trim();
+    if (!phaseName) continue;
+    const guidance = String(formData.get(`phase${i}Guidance`) ?? "").trim();
+    const roundCapPerPhase = Number(formData.get(`phase${i}RoundCap`));
+    if (!guidance || !Number.isFinite(roundCapPerPhase)) {
+      throw new Error(`Phase "${phaseName}" needs guidance text and a numeric round cap.`);
+    }
+    phases.push({
+      orderIndex: phases.length,
+      name: phaseName,
+      guidance,
+      roundCapPerPhase,
+      assignsRoles: formData.get(`phase${i}AssignsRoles`) === "on",
+      allowsResearch: formData.get(`phase${i}AllowsResearch`) === "on",
+    });
+  }
+  if (phases.length === 0) {
+    throw new Error("At least one phase is required.");
   }
 
   const configs = await prisma.providerConfig.findMany();
@@ -98,8 +129,9 @@ export async function createRunAction(formData: FormData) {
   await prisma.run.create({
     data: {
       name,
+      topic,
       totalBudgetCapUsd: totalBudget,
-      roundCapPerPhase,
+      phases: { create: phases },
       agents: {
         create: selectedProviders.map((provider, seatIndex) => {
           const config = configs.find((c) => c.provider === provider)!;

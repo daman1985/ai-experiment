@@ -16,15 +16,6 @@ enum Provider {
   GOOGLE
 }
 
-// Phases the run moves through in order. Ideation and role assignment use
-// the same round-robin + consensus/vote mechanism; operation is whatever
-// running the chosen business turns out to mean, decided by the agents.
-enum Phase {
-  IDEATION
-  ROLE_ASSIGNMENT
-  OPERATION
-}
-
 enum RunStatus {
   DRAFT // created but not started -- keys/budgets not yet confirmed
   ACTIVE
@@ -65,21 +56,29 @@ model ProviderConfig {
 model Run {
   id     String    @id @default(cuid())
   name   String?
+  // What the room is actually discussing -- free text, admin-supplied at
+  // creation. Originally hardcoded to "what business should we start";
+  // now the room can be given any topic. Fed into the system prompt in
+  // place of the old fixed business-founding framing.
+  topic  String
   status RunStatus @default(DRAFT)
 
-  currentPhase Phase @default(IDEATION)
+  // Position into `phases` (ordered by RunPhase.orderIndex) -- replaces
+  // the old fixed Phase enum. See RunPhase below for why.
+  currentPhaseIndex Int @default(0)
 
   // Round-robin turn order is derived, not stored: the Nth turn in a phase
-  // goes to activeAgents[N mod activeAgents.length] (see lib/agents/engine.ts).
-  // A yield substitutes a named agent into that slot for one tick instead
-  // of adding an extra turn, so every active agent still gets exactly one
-  // turn per lap regardless of how many yields happened along the way.
-  // pendingYieldToAgentId is the only rotation state that actually needs
-  // to persist between ticks; roundNumber is a cached display value,
-  // recomputed from the turn count on every tick, not authoritative.
+  // goes to activeAgents[N mod activeAgents.length], with the starting
+  // seat rotated by round to avoid a permanent first-mover advantage (see
+  // lib/agents/engine.ts). A yield substitutes a named agent into that
+  // slot for one tick instead of adding an extra turn, so every active
+  // agent still gets exactly one turn per lap regardless of how many
+  // yields happened along the way. pendingYieldToAgentId is the only
+  // rotation state that actually needs to persist between ticks;
+  // roundNumber is a cached display value, recomputed from the turn count
+  // on every tick, not authoritative.
   pendingYieldToAgentId String?
   roundNumber           Int     @default(0)
-  roundCapPerPhase      Int     @default(10)
   forcedVotePending     Boolean @default(false)
 
   // Soft ceiling on total run spend, independent of each agent's own cap --
@@ -97,9 +96,49 @@ model Run {
   endedAt   DateTime?
 
   agents    Agent[]
+  phases    RunPhase[]
   turns     Turn[]
   decisions Decision[]
   artifacts Artifact[]
+}
+
+// One stage of a run's discussion, admin-defined at run-creation time
+// (with a business-lifecycle template pre-filled by default, editable or
+// replaceable for any other topic). Replaces the old fixed
+// IDEATION/ROLE_ASSIGNMENT/OPERATION enum -- a topic-agnostic room can't
+// assume every topic has a natural "assign roles" or "operate" stage.
+// Phases resolve in admin-defined order: each one ends when the room
+// reaches consensus or its own round cap forces a vote, producing a
+// Decision, before the room moves to the next phase -- or, on the last
+// phase, the run completes.
+model RunPhase {
+  id         String @id @default(cuid())
+  runId      String
+  run        Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  orderIndex Int
+  name       String
+  // Freeform phase-specific instruction injected into the system prompt
+  // for turns taken during this phase (replaces the old hardcoded
+  // PHASE_GUIDANCE record keyed by enum value).
+  guidance   String
+  roundCapPerPhase Int @default(10)
+  // When true, a resolved consensus is additionally parsed into
+  // per-agent Agent.assignedRole values (the "who does what" extraction
+  // the original business-founding template used for its second phase).
+  // Opt-in per phase rather than hardcoded to a phase name, so any topic
+  // can include a "divide up responsibilities" stage if it wants one.
+  assignsRoles     Boolean @default(false)
+  // Whether agents get the web-search tool during this phase. The
+  // original template disabled it for its open-ended "operate the
+  // business" phase (a forced vote there could still search) -- kept as
+  // a per-phase choice rather than hardcoded to a phase name.
+  allowsResearch   Boolean @default(true)
+
+  turns     Turn[]
+  decisions Decision[]
+  artifacts Artifact[]
+
+  @@unique([runId, orderIndex])
 }
 
 model Agent {
@@ -115,8 +154,8 @@ model Agent {
   budgetCapUsd Decimal @default(30) @db.Decimal(10, 2)
   spendUsd     Decimal @default(0) @db.Decimal(10, 6)
 
-  // A role only exists once ROLE_ASSIGNMENT resolves (e.g. "CEO", "Head of
-  // Product") -- left null until then.
+  // A role only exists once a role-assigning phase resolves (e.g. "CEO",
+  // "Head of Product") -- left null until then.
   assignedRole String?
 
   // False once this agent's budget cap is hit or it errors out repeatedly;
@@ -145,12 +184,24 @@ model Turn {
   agentId String
   agent   Agent  @relation("TurnAgent", fields: [agentId], references: [id])
 
-  phase          Phase
+  phaseId String
+  phase   RunPhase @relation(fields: [phaseId], references: [id])
+
   roundNumber    Int
   sequenceNumber Int // global monotonic order within the run
 
   message          String
   weaknessCritique String
+
+  // Self-reported confidence in the current leading position, before and
+  // after this turn's exposure to peers' prior turns -- lets the admin
+  // (and eventually a decision-map view) distinguish "I reached this
+  // independently" from "I changed because peers said so," rather than
+  // treating any agreement as evidence of good-faith convergence. Private
+  // telemetry: never replayed back into other agents' prompt context, so
+  // it can't itself become something to conform on.
+  confidenceBeforePeerUpdate Float
+  confidenceAfterPeerUpdate  Float
 
   readyToDecide  Boolean @default(false)
   yieldToAgentId String?
@@ -175,11 +226,12 @@ model Turn {
 }
 
 model Decision {
-  id        String         @id @default(cuid())
-  runId     String
-  run       Run            @relation(fields: [runId], references: [id], onDelete: Cascade)
-  phase     Phase
-  outcome   String // e.g. the chosen business, or the full role assignment
+  id      String @id @default(cuid())
+  runId   String
+  run     Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  phaseId String
+  phase   RunPhase       @relation(fields: [phaseId], references: [id])
+  outcome String // e.g. the chosen approach, or the full role assignment
   method    DecisionMethod
   dissent   Json? // { agentId: string, reason: string }[] when not unanimous
   decidedAt DateTime       @default(now())
@@ -193,7 +245,8 @@ model Artifact {
   id               String  @id @default(cuid())
   runId            String
   run              Run     @relation(fields: [runId], references: [id], onDelete: Cascade)
-  phase            Phase
+  phaseId          String
+  phase            RunPhase @relation(fields: [phaseId], references: [id])
   type             String
   title            String
   content          String

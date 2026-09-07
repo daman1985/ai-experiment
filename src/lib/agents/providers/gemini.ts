@@ -18,8 +18,10 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
   properties: {
     message: { type: Type.STRING },
     weaknessCritique: { type: Type.STRING },
+    confidenceBeforePeerUpdate: { type: Type.NUMBER },
+    confidenceAfterPeerUpdate: { type: Type.NUMBER },
     readyToDecide: { type: Type.BOOLEAN },
-    yieldToDisplayName: { type: Type.STRING, nullable: true },
+    yieldToRoomLabel: { type: Type.STRING, nullable: true },
     voteChoice: { type: Type.STRING, nullable: true },
     artifact: {
       type: Type.OBJECT,
@@ -35,8 +37,10 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
   required: [
     "message",
     "weaknessCritique",
+    "confidenceBeforePeerUpdate",
+    "confidenceAfterPeerUpdate",
     "readyToDecide",
-    "yieldToDisplayName",
+    "yieldToRoomLabel",
     "voteChoice",
     "artifact",
   ],
@@ -47,9 +51,18 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
 // below (systemInstruction/responseSchema/googleSearch under `config`,
 // response.text, response.usageMetadata.*TokenCount) were confirmed
 // directly against this project's installed @google/genai type
-// definitions, not recalled from training -- but Gemini's documented
-// behavior of not combining `tools` with `responseSchema` in one call is
-// from training and should be smoke-tested with a real key.
+// definitions, not recalled from training.
+//
+// This still runs research and structured output as two separate calls.
+// One of the two September 2026 model-selection research reports claims
+// Google's current Gemini 3-series structured-output docs show
+// `googleSearch` and `responseSchema` combinable in a single request
+// (Preview); the other claims the opposite, citing an older/third-party
+// source. The two reports disagree and this environment can't reach
+// ai.google.dev to settle it -- so this keeps the conservative two-call
+// path rather than gambling the turn on an unverified capability. Worth
+// smoke-testing the single-call path directly against a real key before
+// optimizing this away.
 export const geminiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     const ai = new GoogleGenAI({ apiKey: input.apiKey });
@@ -63,7 +76,7 @@ export const geminiAdapter: ProviderAdapter = {
       try {
         const researchResponse = await ai.models.generateContent({
           model: input.modelId,
-          contents: buildResearchPrompt(input.transcript, input.selfDisplayName),
+          contents: buildResearchPrompt(input.transcript, input.selfRoomLabel),
           config: {
             systemInstruction: input.systemPrompt,
             tools: [{ googleSearch: {} }],
@@ -91,7 +104,7 @@ export const geminiAdapter: ProviderAdapter = {
       model: input.modelId,
       contents: buildTurnPrompt({
         transcript: input.transcript,
-        selfDisplayName: input.selfDisplayName,
+        selfRoomLabel: input.selfRoomLabel,
         researchNote,
       }),
       config: {

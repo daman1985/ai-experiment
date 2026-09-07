@@ -26,11 +26,24 @@ export const anthropicAdapter: ProviderAdapter = {
         model: input.modelId,
         max_tokens: RESEARCH_MAX_TOKENS,
         system: input.systemPrompt,
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }],
+        // Capped to one direct search per research turn -- per the
+        // September 2026 model-selection research, every extra internal
+        // search/code-execution iteration is tail latency this app can't
+        // afford under the 60s serverless timeout. `allowed_callers:
+        // ["direct"]` opts out of the newer dynamic-filtering-via-code-
+        // execution default for the same reason.
+        tools: [
+          {
+            type: "web_search_20260318",
+            name: "web_search",
+            max_uses: 1,
+            allowed_callers: ["direct"],
+          },
+        ],
         messages: [
           {
             role: "user",
-            content: buildResearchPrompt(input.transcript, input.selfDisplayName),
+            content: buildResearchPrompt(input.transcript, input.selfRoomLabel),
           },
         ],
       });
@@ -72,7 +85,7 @@ export const anthropicAdapter: ProviderAdapter = {
           role: "user",
           content: buildTurnPrompt({
             transcript: input.transcript,
-            selfDisplayName: input.selfDisplayName,
+            selfRoomLabel: input.selfRoomLabel,
             researchNote,
           }),
         },

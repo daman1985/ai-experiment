@@ -15,14 +15,28 @@ export const turnOutputSchema = z.object({
     .describe(
       "The single biggest weakness in the current leading proposal or plan, stated plainly. Required even when you ultimately agree with the proposal.",
     ),
+  confidenceBeforePeerUpdate: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe(
+      "Your genuine confidence in the current leading position based only on your own reasoning, before weighing anything peers said this round. 0.0-1.0.",
+    ),
+  confidenceAfterPeerUpdate: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe(
+      "Your genuine confidence in the current leading position after this turn's reasoning, having now weighed peers' contributions. 0.0-1.0. A large jump toward the group's apparent consensus is worth being honest about, not smoothing over.",
+    ),
   readyToDecide: z
     .boolean()
     .describe("True only if you believe the group has enough to decide now."),
-  yieldToDisplayName: z
+  yieldToRoomLabel: z
     .string()
     .nullable()
     .describe(
-      "Name of another participant to address directly / hear from next, or null if you're not yielding to anyone specific.",
+      "Room label (e.g. 'Agent B') of another participant to address directly / hear from next, or null if you're not yielding to anyone specific.",
     ),
   voteChoice: z
     .string()
@@ -52,11 +66,11 @@ export interface ToolCallLogEntry {
 }
 
 export interface TranscriptEntryForPrompt {
-  speakerDisplayName: string;
+  speakerRoomLabel: string;
   message: string;
   weaknessCritique: string;
   readyToDecide: boolean;
-  yieldToDisplayName: string | null;
+  yieldToRoomLabel: string | null;
   isVote: boolean;
   voteChoice: string | null;
 }
@@ -66,8 +80,8 @@ export interface RunTurnInput {
   modelId: string;
   systemPrompt: string;
   transcript: TranscriptEntryForPrompt[];
-  selfDisplayName: string;
-  otherDisplayNames: string[];
+  selfRoomLabel: string;
+  otherRoomLabels: string[];
   enableResearch: boolean;
   isForcedVote: boolean;
 }

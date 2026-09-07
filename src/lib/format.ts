@@ -1,17 +1,4 @@
-import type { Phase, RunStatus } from "@prisma/client";
-
-export function formatPhase(phase: Phase | string): string {
-  switch (phase) {
-    case "IDEATION":
-      return "Ideation";
-    case "ROLE_ASSIGNMENT":
-      return "Role assignment";
-    case "OPERATION":
-      return "Operation";
-    default:
-      return phase;
-  }
-}
+import type { RunStatus } from "@prisma/client";
 
 type BadgeVariant = "success" | "warning" | "error" | "neutral" | "accent";
 

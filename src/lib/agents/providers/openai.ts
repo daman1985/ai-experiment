@@ -12,13 +12,18 @@ import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
 const RESEARCH_MAX_TOKENS = 2000;
 const TURN_MAX_TOKENS = 2000;
 
-// NOTE: OpenAI's Responses API and its hosted web-search tool move fast and
-// this environment's network egress blocked live docs while building this
-// adapter (platform.openai.com, openrouter.ai were both unreachable) --
-// verify the `web_search_preview` tool type and the exact shape of
-// `response.output` tool-call items against a real key before a full
-// autonomous run. Token usage extraction and structured-output parsing
-// follow OpenAI's documented Responses API conventions and are lower-risk.
+// Uses the current `web_search` tool (not the legacy `web_search_preview`
+// this adapter originally shipped with) -- confirmed against OpenAI's own
+// live pricing page during the September 2026 model-selection research
+// pass: the current tool is unified across reasoning/non-reasoning models
+// at $10/1k calls + search-content tokens at the model's normal rate,
+// where the legacy preview name had a split, more expensive pricing
+// table. The shape of `response.output` tool-call items below
+// (`web_search_call` / `.action.query`) was confirmed directly against
+// this project's installed `openai` SDK types (v7.10.0), not recalled
+// from training -- still worth a smoke test against a real key before a
+// full autonomous run, since hosted-tool response shapes do shift
+// between SDK versions.
 export const openaiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     const client = new OpenAI({ apiKey: input.apiKey });
@@ -33,8 +38,8 @@ export const openaiAdapter: ProviderAdapter = {
         const researchResponse = await client.responses.create({
           model: input.modelId,
           instructions: input.systemPrompt,
-          tools: [{ type: "web_search_preview" }],
-          input: buildResearchPrompt(input.transcript, input.selfDisplayName),
+          tools: [{ type: "web_search" }],
+          input: buildResearchPrompt(input.transcript, input.selfRoomLabel),
         });
 
         inputTokens += researchResponse.usage?.input_tokens ?? 0;
@@ -64,7 +69,7 @@ export const openaiAdapter: ProviderAdapter = {
       text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
       input: buildTurnPrompt({
         transcript: input.transcript,
-        selfDisplayName: input.selfDisplayName,
+        selfRoomLabel: input.selfRoomLabel,
         researchNote,
       }),
     });
