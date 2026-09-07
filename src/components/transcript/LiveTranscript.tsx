@@ -94,11 +94,37 @@ export function LiveTranscript({
   const [announceText, setAnnounceText] = useState("");
 
   // Poll while active -- same 20s cadence as before, just relocated here
-  // now that this component owns more than just the refresh timer.
+  // now that this component owns more than just the refresh timer. Paused
+  // while the tab isn't visible: a forgotten background tab left open on
+  // an active run otherwise polls forever, and enough of those piling up
+  // across several runs is real pressure on the database's connection
+  // pool -- observed directly causing the cron tick to time out.
   useEffect(() => {
     if (!enabled) return;
-    const interval = setInterval(() => router.refresh(), 20_000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (interval) return;
+      interval = setInterval(() => router.refresh(), 20_000);
+    };
+    const stop = () => {
+      if (!interval) return;
+      clearInterval(interval);
+      interval = null;
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        router.refresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [enabled, router]);
 
   // Mark the initial load as complete once the first paint has committed,

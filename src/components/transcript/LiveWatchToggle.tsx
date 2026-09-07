@@ -9,6 +9,10 @@ import { advanceRunNowAction } from "@/app/runs/[id]/actions";
 // firing on a fixed timer regardless of overlap, since a turn with a web
 // search can take much longer than a plain one.
 const POLL_DELAY_MS = 2000;
+// How often to re-check whether the tab has come back into view while
+// paused. Not the same knob as POLL_DELAY_MS -- this never triggers an
+// actual advance, just a cheap visibility check.
+const HIDDEN_RECHECK_MS = 2000;
 
 // Opt-in accelerant for when the admin is actually watching a run: while
 // on, this pumps the run forward via the same advanceRun the cron tick
@@ -27,6 +31,13 @@ export function LiveWatchToggle({ runId }: { runId: string }) {
 
     async function loop() {
       while (!cancelled) {
+        // Paused while the tab is backgrounded -- a forgotten tab left
+        // checked must never keep spending real API budget or hammering
+        // the database unattended. Resumes the moment it's visible again.
+        if (document.visibilityState !== "visible") {
+          await new Promise((resolve) => setTimeout(resolve, HIDDEN_RECHECK_MS));
+          continue;
+        }
         try {
           await advanceRunNowAction(runId);
         } catch {
@@ -55,7 +66,8 @@ export function LiveWatchToggle({ runId }: { runId: string }) {
       />
       Watch live
       <span className="text-text-tertiary">
-        (advances every couple seconds while this is open -- real spend, same as any turn)
+        (advances every couple seconds while this tab is open and visible -- real spend, same as
+        any turn; pauses automatically if you switch away)
       </span>
     </label>
   );
