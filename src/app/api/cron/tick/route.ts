@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { advanceRun } from "@/lib/agents/engine";
+import { advanceRun, MIN_TURN_BUDGET_MS } from "@/lib/agents/engine";
 
 // One tick = one turn (or one budget/consensus housekeeping step) for
 // every currently ACTIVE run. Vercel Cron calls this on the schedule in
@@ -12,16 +12,21 @@ import { advanceRun } from "@/lib/agents/engine";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
-// A single run's worst case (research + turn, or two sequential
-// extraction calls) is ~35s even with the tightened per-call timeouts in
-// the provider adapters -- so two active runs processed sequentially
-// could still approach or exceed this route's 60s maxDuration if a tick
-// hits worst-case latency on both. A hard kill produces no response at
-// all (though turns already committed inside advanceRun aren't lost --
-// each is its own transaction), so it's better to stop starting new runs
-// once there isn't enough of the budget left and let the rest wait for
-// the next tick 10 minutes later, than to gamble on a hard kill.
-const TICK_BUDGET_MS = 45_000;
+// Confirmed directly against a real production tick: two active runs
+// processed sequentially in one invocation genuinely can, and did, blow
+// past this route's 60s maxDuration -- the first run's Anthropic call
+// correctly hit its own 35s-worst-case controlled timeout (withTimeout
+// working as designed), but that left only ~25s of the 60s budget for
+// the second run, which then got hard-killed by the platform instead of
+// its own timeout. A per-run *fresh* budget check (the previous
+// TICK_BUDGET_MS approach) doesn't prevent this: what matters is how
+// much of the *one shared* 60s deadline is left, not a local guess.
+// deadlineAt is that one shared deadline, threaded through advanceRun so
+// every step (starting a turn, or attempting a decision's extraction
+// calls) checks against the same absolute cutoff rather than assuming a
+// fresh allotment. 5s of margin below the actual 60s hard kill for
+// response/serialization overhead.
+const DEADLINE_MARGIN_MS = 5_000;
 
 export async function GET(request: NextRequest) {
   const configuredSecret = process.env.CRON_SECRET;
@@ -37,6 +42,7 @@ export async function GET(request: NextRequest) {
   }
 
   const tickStart = Date.now();
+  const deadlineAt = tickStart + maxDuration * 1000 - DEADLINE_MARGIN_MS;
   const activeRuns = await prisma.run.findMany({
     where: { status: "ACTIVE" },
     select: { id: true },
@@ -53,16 +59,16 @@ export async function GET(request: NextRequest) {
   const results = [];
   for (const run of activeRuns) {
     const runStart = Date.now();
-    if (runStart - tickStart > TICK_BUDGET_MS) {
+    if (deadlineAt - runStart < MIN_TURN_BUDGET_MS) {
       console.log(
-        `[cron/tick] stopping early, ${TICK_BUDGET_MS}ms budget spent -- deferring ${run.id} (and any after it) to the next tick`,
+        `[cron/tick] stopping early, not enough of the shared deadline left -- deferring ${run.id} (and any after it) to the next tick`,
       );
       results.push({ runId: run.id, action: "deferred" as const, detail: "tick budget exhausted" });
       continue;
     }
     console.log(`[cron/tick] advancing ${run.id} (+${runStart - tickStart}ms since tick start)`);
     try {
-      const result = await advanceRun(run.id);
+      const result = await advanceRun(run.id, deadlineAt);
       console.log(
         `[cron/tick] ${run.id} done in ${Date.now() - runStart}ms: ${JSON.stringify(result)}`,
       );

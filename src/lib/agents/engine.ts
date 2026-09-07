@@ -42,6 +42,21 @@ function toEncryptedPayload(config: ProviderConfig) {
 // crashed invocation's lock doesn't stay stuck for the rest of the run.
 const STALE_LOCK_MS = 90_000;
 
+// Worst case for the LLM turn call path (research timeout + turn timeout,
+// see providers/anthropic.ts et al) plus margin. A caller sharing one
+// hard deadline across multiple runs (the cron tick) needs this to decide
+// whether there's enough of the deadline left to even start a turn.
+export const MIN_TURN_BUDGET_MS = 37_000;
+// Worst case for two sequential extraction calls (outcome + root-cause,
+// or vote tally + root-cause, see decisionExtraction.ts) plus margin.
+// Checked against the *shared* deadline, not a fresh budget, before
+// attempting either extraction chain -- see the deadlineAt threading
+// below. If it doesn't fit, the extraction is skipped this call and
+// retried on the next one: checkConsensus/handleForcedVoteTurn re-derive
+// "is everyone ready/voted" from stored turns each time, so nothing is
+// lost by deferring, just delayed.
+export const MIN_EXTRACTION_BUDGET_MS = 32_000;
+
 // One call = one turn (or one budget/consensus housekeeping step) for a
 // single run. Designed to be cheap and idempotent-ish to call repeatedly
 // -- it re-derives whose turn it is from stored turns each time rather
@@ -50,7 +65,18 @@ const STALE_LOCK_MS = 90_000;
 // admin's "watch live" polling both call this), so the actual work
 // happens under a claimed lock; a caller that loses the race gets a
 // harmless noop back instead of paying for a duplicate LLM call.
-export async function advanceRun(runId: string): Promise<AdvanceResult> {
+//
+// deadlineAt is an absolute epoch-ms deadline, not a fresh per-call
+// budget -- critical when a caller (the cron tick) processes multiple
+// runs against one shared hard function timeout: each run must know how
+// much of *that same* deadline is left, not assume it gets a full fresh
+// allotment. Defaults to a fresh 55s out for callers with their own
+// separate invocation (e.g. the "watch live" admin action), which don't
+// share a deadline with anything else.
+export async function advanceRun(
+  runId: string,
+  deadlineAt: number = Date.now() + 55_000,
+): Promise<AdvanceResult> {
   const claimed = await prisma.run.updateMany({
     where: {
       id: runId,
@@ -66,7 +92,7 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
     return { action: "noop", detail: "already advancing (another call is in flight)" };
   }
   try {
-    return await advanceRunLocked(runId);
+    return await advanceRunLocked(runId, deadlineAt);
   } finally {
     await prisma.run.update({ where: { id: runId }, data: { isAdvancing: false } });
   }
@@ -127,7 +153,7 @@ async function fullTranscript(runId: string): Promise<TranscriptEntryForPrompt[]
     .map((e) => e.entry);
 }
 
-async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
+async function advanceRunLocked(runId: string, deadlineAt: number): Promise<AdvanceResult> {
   const run = await prisma.run.findUnique({
     where: { id: runId },
     include: { agents: { orderBy: { seatIndex: "asc" } } },
@@ -327,10 +353,10 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
   ).filter((a) => a.isActive);
 
   if (isForcedVote) {
-    return handleForcedVoteTurn(run, activeAgents, configByProvider, speaker);
+    return handleForcedVoteTurn(run, activeAgents, configByProvider, speaker, deadlineAt);
   }
 
-  const consensusResult = await checkConsensus(run, activeAgents, configByProvider);
+  const consensusResult = await checkConsensus(run, activeAgents, configByProvider, deadlineAt);
   if (consensusResult) return consensusResult;
 
   const turnsSinceDecisionNow = turnsSinceDecision + 1;
@@ -390,10 +416,19 @@ async function checkConsensus(
   run: Run,
   activeAgents: Agent[],
   configByProvider: Map<string, ProviderConfig>,
+  deadlineAt: number,
 ): Promise<AdvanceResult | null> {
   const latest = await latestTurnStateByAgent(run.id, activeAgents);
   const allReady = activeAgents.every((a) => latest.get(a.id)?.readyToDecide === true);
   if (!allReady) return null;
+
+  if (deadlineAt - Date.now() < MIN_EXTRACTION_BUDGET_MS) {
+    console.log(`[checkConsensus] ${run.id}: consensus reached but budget too tight for extraction this tick -- deferring`);
+    return {
+      action: "turn_taken",
+      detail: "Consensus reached; outcome extraction deferred to the next tick (budget tight).",
+    };
+  }
 
   const anthropicConfig = configByProvider.get("ANTHROPIC");
   if (!anthropicConfig) {
@@ -446,6 +481,7 @@ async function handleForcedVoteTurn(
   activeAgents: Agent[],
   configByProvider: Map<string, ProviderConfig>,
   speaker: Agent,
+  deadlineAt: number,
 ): Promise<AdvanceResult> {
   const recentVotes = await prisma.turn.findMany({
     where: { runId: run.id, isVote: true },
@@ -471,6 +507,14 @@ async function handleForcedVoteTurn(
     return {
       action: "turn_taken",
       detail: `${speaker.displayName} voted; waiting on ${activeAgents.length - latestVoteByAgent.size} more`,
+    };
+  }
+
+  if (deadlineAt - Date.now() < MIN_EXTRACTION_BUDGET_MS) {
+    console.log(`[handleForcedVoteTurn] ${run.id}: all votes in but budget too tight for extraction this tick -- deferring`);
+    return {
+      action: "turn_taken",
+      detail: "All votes are in; tally extraction deferred to the next tick (budget tight).",
     };
   }
 
