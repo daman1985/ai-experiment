@@ -5,9 +5,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { prisma } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
-import { logDiagnostic } from "@/lib/diagnostics";
+import { logDiagnostic, logDiagnosticBatch } from "@/lib/diagnostics";
 import { buildSystemPrompt, buildResearchPrompt, buildTurnPrompt } from "@/lib/agents/prompt";
 import { turnOutputSchema } from "@/lib/agents/schema";
+import { withTimeout } from "@/lib/agents/withTimeout";
 
 // Wipes every recorded event so the next action's output is unambiguous
 // -- otherwise fresh results sit above a growing pile of old ones and
@@ -55,6 +56,19 @@ export async function clearDiagnosticsAction(): Promise<void> {
 // parallel so one click gives a complete answer instead of another
 // single data point.
 const CHECK_TIMEOUT_MS = 20_000;
+// Every check using this timeout has succeeded in 1-5s; the two real
+// research/turn calls have failed at exactly CHECK_TIMEOUT_MS every
+// time they've been run, with zero variance, across dozens of real
+// production attempts. That pattern is ambiguous between two very
+// different problems with very different fixes: genuinely stuck
+// forever (a platform-side defect, no timeout fixes it, avoid the
+// triggering feature or escalate to Anthropic), or legitimately slower
+// than 20s for this harder kind of request (a real web search
+// round-trip, or genuinely original creative+critical reasoning for an
+// opening turn) -- in which case the fix is just a longer timeout on
+// these two specific calls in production. This extended budget, used
+// only for those two, is what actually distinguishes the two.
+const EXTENDED_CHECK_TIMEOUT_MS = 45_000;
 
 interface CheckOutcome {
   label: string;
@@ -64,32 +78,31 @@ interface CheckOutcome {
   promptLength: number;
 }
 
+// Reuses the same withTimeout() the real provider adapters use (see
+// lib/agents/withTimeout.ts) instead of a second hand-rolled
+// AbortController+setTimeout implementation -- one guaranteed-timeout
+// mechanism to keep correct, not two (a third copy already exists in
+// the sibling /api/diagnose-anthropic route, which is its own temporary
+// diagnostic slated for deletion; not worth threading this through that
+// one too).
 async function timedCall(
   label: string,
   promptLength: number,
   fn: (signal: AbortSignal) => Promise<string>,
+  timeoutMs: number = CHECK_TIMEOUT_MS,
 ): Promise<CheckOutcome> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
   const start = Date.now();
   try {
-    const value = await fn(controller.signal);
+    const value = await withTimeout(fn, timeoutMs, label);
     return { label, ok: true, elapsedMs: Date.now() - start, detail: value, promptLength };
   } catch (err) {
-    const elapsedMs = Date.now() - start;
     return {
       label,
       ok: false,
-      elapsedMs,
-      detail: controller.signal.aborted
-        ? `timed out after ${CHECK_TIMEOUT_MS}ms`
-        : err instanceof Error
-          ? err.message
-          : String(err),
+      elapsedMs: Date.now() - start,
+      detail: err instanceof Error ? err.message : String(err),
       promptLength,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -189,21 +202,29 @@ async function runBattery(): Promise<void> {
     bareCheck("trivial_bare", trivialSystemPrompt),
     toolsCheck("trivial_tools", trivialSystemPrompt),
     bareCheck("real_bare", realSystemPrompt),
-    timedCall("real_tools (full research call)", realSystemPrompt.length, (signal) =>
-      client.messages
-        .create(
-          { model: modelId, max_tokens: 2000, system: realSystemPrompt, tools: webSearchTools, messages: [{ role: "user", content: researchPrompt }] },
-          { timeout: CHECK_TIMEOUT_MS, signal },
-        )
-        .then(() => "ok"),
+    timedCall(
+      "real_tools (full research call, 45s budget)",
+      realSystemPrompt.length,
+      (signal) =>
+        client.messages
+          .create(
+            { model: modelId, max_tokens: 2000, system: realSystemPrompt, tools: webSearchTools, messages: [{ role: "user", content: researchPrompt }] },
+            { timeout: EXTENDED_CHECK_TIMEOUT_MS, signal },
+          )
+          .then(() => "ok"),
+      EXTENDED_CHECK_TIMEOUT_MS,
     ),
-    timedCall("real_schema (full turn call)", realSystemPrompt.length, (signal) =>
-      client.messages
-        .parse(
-          { model: modelId, max_tokens: 2000, system: realSystemPrompt, output_config: { format: zodOutputFormat(turnOutputSchema) }, messages: [{ role: "user", content: turnPrompt }] },
-          { timeout: CHECK_TIMEOUT_MS, signal },
-        )
-        .then(() => "ok"),
+    timedCall(
+      "real_schema (full turn call, 45s budget)",
+      realSystemPrompt.length,
+      (signal) =>
+        client.messages
+          .parse(
+            { model: modelId, max_tokens: 2000, system: realSystemPrompt, output_config: { format: zodOutputFormat(turnOutputSchema) }, messages: [{ role: "user", content: turnPrompt }] },
+            { timeout: EXTENDED_CHECK_TIMEOUT_MS, signal },
+          )
+          .then(() => "ok"),
+      EXTENDED_CHECK_TIMEOUT_MS,
     ),
     bareCheck("real_first_half_bare", realFirstHalf),
     bareCheck("real_second_half_bare", realSecondHalf),
@@ -239,14 +260,24 @@ async function runBattery(): Promise<void> {
     ),
   ]);
 
-  for (const r of results) {
-    await logDiagnostic({
+  // One batched write, not 11 sequential ones -- with the two extended
+  // checks now taking up to 45s of the route's 60s budget, a sequential
+  // logging tail left too little margin for any DB latency spike (a real
+  // /code-review finding on this diff). A first fix (Promise.all) traded
+  // that risk for a different one caught by a second review pass: fully
+  // concurrent writes can commit out of order, and this page displays
+  // newest-first by createdAt, so the battery's reasoning-order narrative
+  // could render scrambled. logDiagnosticBatch gets both: one fast
+  // round-trip, explicit incrementing timestamps to guarantee display
+  // order matches the array.
+  await logDiagnosticBatch(
+    results.map((r) => ({
       source: "diagnose:battery",
-      level: r.ok ? "info" : "error",
+      level: r.ok ? ("info" as const) : ("error" as const),
       message: r.ok
         ? `${r.label}: succeeded in ${r.elapsedMs}ms (${r.detail})`
         : `${r.label}: failed after ${r.elapsedMs}ms: ${r.detail}`,
       detail: { promptLength: r.promptLength },
-    });
-  }
+    })),
+  );
 }

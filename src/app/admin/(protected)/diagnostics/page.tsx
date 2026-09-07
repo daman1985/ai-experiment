@@ -8,11 +8,12 @@ import { runRealPromptCheckAction, clearDiagnosticsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 // The "run diagnostic call" action below fires a full battery of real
-// Anthropic calls in parallel, each with its own 20s abort -- needs more
-// than the platform's default route timeout to avoid the action itself
-// getting killed before every check has a chance to finish or abort
-// cleanly, plus a little more for the sequential logging afterward.
-export const maxDuration = 45;
+// Anthropic calls in parallel -- most abort at 20s, but two run on a
+// deliberately extended 45s budget to distinguish "genuinely stuck" from
+// "legitimately slower than 20s" (see actions.ts). Needs more than the
+// platform's default route timeout for those two to get a real answer
+// instead of being cut off by this route itself first.
+export const maxDuration = 60;
 
 const MAX_EVENTS = 400;
 
@@ -87,7 +88,7 @@ export default async function DiagnosticsPage({
 
       <div className="flex flex-wrap items-start gap-2">
         <form action={runRealPromptCheckAction}>
-          <SubmitButton variant="secondary" className="px-3 py-1 text-xs" pendingText="Running (up to ~20s)...">
+          <SubmitButton variant="secondary" className="px-3 py-1 text-xs" pendingText="Running (up to ~45s)...">
             Run full diagnostic battery
           </SubmitButton>
         </form>
@@ -104,8 +105,9 @@ export default async function DiagnosticsPage({
       </div>
       <p className="text-xs text-text-tertiary">
         &quot;Run full diagnostic battery&quot; fires several real Anthropic calls in parallel
-        against the configured key to isolate exactly what's causing a hang -- takes up to ~20
-        seconds; results appear below automatically once it finishes. &quot;Clear log&quot;
+        against the configured key to isolate exactly what's causing a hang -- most finish in
+        seconds, but two are deliberately given up to 45 seconds; results appear below
+        automatically once it finishes. &quot;Clear log&quot;
         deletes every recorded event so far, so the next run's output isn't mixed in with old
         ticks/errors -- it doesn't affect the app itself, only this log.
       </p>
