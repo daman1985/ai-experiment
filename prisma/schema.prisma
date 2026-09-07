@@ -169,6 +169,8 @@ model Turn {
 
   createdAt DateTime @default(now())
 
+  artifacts Artifact[]
+
   @@unique([runId, sequenceNumber])
 }
 
@@ -197,6 +199,11 @@ model Artifact {
   content          String
   createdByAgentId String?
   createdByAgent   Agent?  @relation(fields: [createdByAgentId], references: [id])
+  // The turn that produced this artifact, if any -- lets the UI show an
+  // inline preview at the moment of creation and link the separate
+  // Artifacts section back to that point in the transcript.
+  turnId           String?
+  turn             Turn?   @relation(fields: [turnId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

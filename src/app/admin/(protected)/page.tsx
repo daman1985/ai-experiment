@@ -6,20 +6,11 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { runStatusVariant } from "@/lib/format";
 
 // This reads live run/agent state and requires an authenticated session --
 // never prerender it at build time.
 export const dynamic = "force-dynamic";
-
-type BadgeVariant = "success" | "warning" | "error" | "neutral" | "accent";
-
-function statusVariant(status: string): BadgeVariant {
-  if (status === "ACTIVE") return "success";
-  if (status === "PAUSED") return "warning";
-  if (status.startsWith("STOPPED")) return "error";
-  if (status === "COMPLETED") return "accent";
-  return "neutral";
-}
 
 export default async function AdminDashboard() {
   const runs = await prisma.run.findMany({
@@ -50,7 +41,7 @@ export default async function AdminDashboard() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-text-primary">{run.name ?? run.id}</span>
-                  <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+                  <Badge variant={runStatusVariant(run.status)}>{run.status}</Badge>
                 </div>
                 <Link
                   href={`/runs/${run.id}`}

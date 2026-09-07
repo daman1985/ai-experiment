@@ -1,0 +1,74 @@
+import type { Agent, Artifact, Turn } from "@prisma/client";
+import { AgentAvatar } from "./AgentAvatar";
+import { ArtifactInlinePreview } from "./ArtifactInlinePreview";
+import { Badge } from "@/components/ui/Badge";
+import { AGENT_STYLES } from "@/lib/agents/agentColor";
+import { fmtUsd } from "@/lib/format";
+
+type TurnWithRelations = Turn & {
+  agent: Agent;
+  yieldToAgent: Agent | null;
+  artifacts: Artifact[];
+};
+
+// One row in the continuous transcript surface -- deliberately not a
+// card (see docs/design-system.md's explicit rejection of "a card for
+// every single message"). The avatar column stays at a fixed left edge
+// across every row so a long reading session doesn't require re-finding
+// where the message content starts.
+export function TurnRow({ turn }: { turn: TurnWithRelations }) {
+  const styles = AGENT_STYLES[turn.agent.provider];
+  const hasStatus = turn.readyToDecide || turn.yieldToAgent || turn.isVote;
+
+  return (
+    <div
+      id={`turn-${turn.sequenceNumber}`}
+      className={`border-b border-l-2 border-border py-4 pl-4 pr-1 last:border-b-0 ${styles.rowBg} ${styles.rowBorder}`}
+    >
+      <div className="grid grid-cols-[2rem_1fr] gap-3">
+        <AgentAvatar provider={turn.agent.provider} displayName={turn.agent.displayName} />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className={`text-sm font-semibold ${styles.text}`}>
+              {turn.agent.displayName}
+              {turn.agent.assignedRole && (
+                <span className="ml-1.5 font-normal text-text-tertiary">
+                  &middot; {turn.agent.assignedRole}
+                </span>
+              )}
+            </span>
+            <span className="tabular-nums text-xs text-text-tertiary">
+              round {turn.roundNumber + 1} &middot; {fmtUsd(Number(turn.costUsd))}
+            </span>
+          </div>
+
+          <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-text-primary">
+            {turn.message}
+          </p>
+
+          <div
+            className={`mt-3 border-l-2 pl-3 text-sm italic leading-snug text-text-secondary ${styles.ruleBorder}`}
+          >
+            {turn.weaknessCritique}
+          </div>
+
+          {hasStatus && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {turn.readyToDecide && <Badge variant="success">Ready to decide</Badge>}
+              {turn.yieldToAgent && (
+                <Badge variant="neutral">Yielded to {turn.yieldToAgent.displayName}</Badge>
+              )}
+              {turn.isVote && (
+                <Badge variant="warning">Vote{turn.voteChoice ? `: ${turn.voteChoice}` : ""}</Badge>
+              )}
+            </div>
+          )}
+
+          {turn.artifacts.map((artifact) => (
+            <ArtifactInlinePreview key={artifact.id} artifact={artifact} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

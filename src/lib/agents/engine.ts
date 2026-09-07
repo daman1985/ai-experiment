@@ -149,7 +149,7 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
   const nextSequenceNumber = (maxSeq._max.sequenceNumber ?? 0) + 1;
 
   await prisma.$transaction(async (tx) => {
-    await tx.turn.create({
+    const createdTurn = await tx.turn.create({
       data: {
         runId: run.id,
         agentId: speaker.id,
@@ -186,6 +186,7 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
           title: result.output.artifact.title,
           content: result.output.artifact.content,
           createdByAgentId: speaker.id,
+          turnId: createdTurn.id,
         },
       });
     }

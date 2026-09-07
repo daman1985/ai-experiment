@@ -213,9 +213,57 @@ classes remain in any admin-authenticated screen. Run status (`ACTIVE`/
 `PAUSED`/`STOPPED*`/`COMPLETED`) maps to `Badge` variants
 (success/warning/error/accent) instead of raw text-color classes.
 Verified visually via Playwright screenshots of both pages, logged in
-against a real run with real provider keys configured. Remaining:
-Phases 4-6 (the Transcript/TurnCard, motion/accessibility, then
-real-content validation).
+against a real run with real provider keys configured.
+
+**Phase 4 (the Transcript/TurnCard) is done** — `src/app/runs/[id]/
+page.tsx` and `src/components/transcript/` (`AgentAvatar`, `TurnStepper`,
+`PhaseDivider`, `DecisionBreak`, `ArtifactInlinePreview`, `TurnRow`).
+Notes on how each "ours to invent" decision landed in code:
+
+- Transcript rows are a continuous surface (`rounded-none`, `border-b`
+  between rows, no per-message card), not chat bubbles — matches the
+  explicit rejection of "a card for every single message."
+- Agent identity: added `src/lib/agents/agentColor.ts` with the
+  three-opacity-tier classes (full-opacity name label, 6% row wash, 20%
+  left rule) as literal Tailwind strings per provider, plus a circular
+  avatar. Avatars use a two-letter initial on a tinted background rather
+  than the provider's real logo — a placeholder "tasteful approximation"
+  (the doc's own phrase for the unresolved implementation detail), since
+  no logo assets are in the project and fetching third-party brand marks
+  wasn't worth the trademark question for a first pass. Revisit if/when
+  real logos matter more than avoiding that question.
+- Weakness critique: always-visible marginalia — left rule in the
+  agent's own color at 30%, italic text, directly under the message.
+- Decision moment: turns and decisions are now merged into one
+  chronological feed (by `createdAt`/`decidedAt`) instead of decisions
+  living in a separate section before the transcript — the "full-width
+  break" is a real break in the actual feed, not a lookalike section
+  above it. `Decision.dissent` (agent ID + reason) is resolved back to
+  display names for readability instead of raw JSON.
+- Artifacts: both, as decided. Schema gained `Artifact.turnId` (new
+  migration `add_artifact_turn_link`) so an artifact can be traced back
+  to the turn that produced it — `engine.ts` now captures the created
+  turn's id and sets it. Inline preview appears on that turn
+  (title + first line, expandable via `<details>`); the bottom Artifacts
+  section is grouped by phase and links back to the transcript position
+  when a `turnId` exists (pre-migration artifacts just won't have the
+  backlink).
+- Turn-order stepper: small dots in the header, current speaker
+  highlighted in that agent's color. "Current" is computed with the same
+  `turnsInPhase % activeAgents.length` rotation math as `engine.ts`
+  (including the pending-yield override), so the stepper never drifts
+  from what will actually happen on the next cron tick.
+- Artifact and turn content render in `font-sans`, not the browser's
+  default monospace for `<pre>` — reserving monospace for genuinely
+  technical identifiers per the engineering spec, not generated prose.
+
+Verified visually via Playwright against a real run with real turns,
+yields, and an artifact; a synthetic `Decision` row was inserted and
+then removed from the local dev DB purely to check the decision-break
+rendering (this run has none yet). Remaining: Phase 5 (motion/
+accessibility — `aria-live`, keyboard nav, roving tabindex for a future
+virtualized list) and Phase 6 (real-content validation once a run
+produces enough transcript to stress-test the layout for real).
 
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
