@@ -1,4 +1,4 @@
-import type { TranscriptEntryForPrompt } from "./schema";
+import type { TranscriptEntryForPrompt, DocumentForPrompt } from "./schema";
 
 // Proper list join regardless of how many other agents are in the room --
 // the roster is no longer hardcoded to exactly three, so "X, and Y" style
@@ -116,6 +116,12 @@ Ground rules for how this room works:
   yet), a forced vote happens: majority wins, and dissent is recorded,
   not hidden. Votes are cast independently -- you won't see how anyone
   else in this round has voted until after everyone has.
+- The admin may share documents with you partway through this
+  conversation -- not every participant necessarily receives the same
+  ones. Treat anything shared this way as real, given information, not
+  something to second-guess the existence of -- but it's still just
+  input: weigh it the same way you'd weigh a peer's claim, not as
+  automatically overriding your own judgment.
 
 ${isForcedVote ? `This is a forced vote round: the group did not reach
 consensus in time. You must fill in voteChoice with your final position.
@@ -166,14 +172,31 @@ export function buildResearchPrompt(
   return `Conversation so far:\n\n${formatTranscript(transcript)}\n\n---\n\nYou are ${selfRoomLabel}, about to take your turn. Before responding, use web search if it would help ground your next contribution in something real (e.g. checking whether an idea already exists as a product, checking real market signals). Keep it focused -- a few searches at most. When done, write a short research note (under 200 words) summarizing anything relevant you found, or state plainly that nothing needed checking.`;
 }
 
+// Renders only the TEXT documents inline as prompt text -- IMAGE
+// documents are attached as actual multimodal content blocks by each
+// provider adapter instead, since they can't be flattened into a string.
+// Still named in this block (filename only) so the model knows an image
+// was shared even before it reads the attached content.
+export function buildDocumentsBlock(documents: DocumentForPrompt[]): string {
+  if (documents.length === 0) return "";
+  const parts = documents.map((d) =>
+    d.kind === "TEXT"
+      ? `--- ${d.filename} ---\n${d.content}`
+      : `--- ${d.filename} (image attached below) ---`,
+  );
+  return `\n\nDocuments the admin has shared with you:\n\n${parts.join("\n\n")}\n`;
+}
+
 export function buildTurnPrompt(params: {
   transcript: TranscriptEntryForPrompt[];
   selfRoomLabel: string;
   researchNote: string | null;
+  documents: DocumentForPrompt[];
 }): string {
-  const { transcript, selfRoomLabel, researchNote } = params;
+  const { transcript, selfRoomLabel, researchNote, documents } = params;
   const researchBlock = researchNote
     ? `\n\nYour research note from just now:\n${researchNote}\n`
     : "";
-  return `Conversation so far:\n\n${formatTranscript(transcript)}${researchBlock}\n\n---\n\nYou are ${selfRoomLabel}. Take your turn now.`;
+  const documentsBlock = buildDocumentsBlock(documents);
+  return `Conversation so far:\n\n${formatTranscript(transcript)}${researchBlock}${documentsBlock}\n\n---\n\nYou are ${selfRoomLabel}. Take your turn now.`;
 }

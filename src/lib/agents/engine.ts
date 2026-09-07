@@ -7,8 +7,19 @@ import {
   extractRootCauseCheck,
   extractVoteTally,
 } from "./decisionExtraction";
-import type { TranscriptEntryForPrompt } from "./schema";
+import type { DocumentForPrompt, TranscriptEntryForPrompt } from "./schema";
 import type { Agent, Prisma, ProviderConfig, Run } from "@prisma/client";
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+async function documentsForAgent(runId: string, agentId: string): Promise<DocumentForPrompt[]> {
+  const docs = await prisma.document.findMany({ where: { runId }, orderBy: { createdAt: "asc" } });
+  return docs
+    .filter((d) => d.sharedWithAll || (isStringArray(d.accessAgentIds) && d.accessAgentIds.includes(agentId)))
+    .map((d) => ({ filename: d.filename, kind: d.kind, mimeType: d.mimeType, content: d.content }));
+}
 
 export interface AdvanceResult {
   action:
@@ -177,6 +188,8 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
     priorDecisions,
   });
 
+  const documents = await documentsForAgent(run.id, speaker.id);
+
   const adapter = getProviderAdapter(speaker.provider);
   const result = await adapter.runTurn({
     apiKey,
@@ -187,6 +200,7 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
     otherRoomLabels,
     enableResearch,
     isForcedVote,
+    documents,
   });
 
   const costUsd = computeCostUsd({

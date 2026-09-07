@@ -107,13 +107,30 @@ export const geminiAdapter: ProviderAdapter = {
       }
     }
 
+    const turnText = buildTurnPrompt({
+      transcript: input.transcript,
+      selfRoomLabel: input.selfRoomLabel,
+      researchNote,
+      documents: input.documents,
+    });
+    const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
+
     const turnResponse = await ai.models.generateContent({
       model: input.modelId,
-      contents: buildTurnPrompt({
-        transcript: input.transcript,
-        selfRoomLabel: input.selfRoomLabel,
-        researchNote,
-      }),
+      contents:
+        imageDocs.length === 0
+          ? turnText
+          : [
+              {
+                role: "user",
+                parts: [
+                  { text: turnText },
+                  ...imageDocs.map((d) => ({
+                    inlineData: { mimeType: d.mimeType, data: d.content },
+                  })),
+                ],
+              },
+            ],
       config: {
         systemInstruction: input.systemPrompt,
         responseMimeType: "application/json",

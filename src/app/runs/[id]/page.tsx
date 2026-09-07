@@ -5,12 +5,13 @@ import { LiveWatchToggle } from "@/components/transcript/LiveWatchToggle";
 import { AgentAvatar } from "@/components/transcript/AgentAvatar";
 import { TurnStepper } from "@/components/transcript/TurnStepper";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
+import { DocumentShared } from "@/components/transcript/DocumentShared";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { AGENT_STYLES } from "@/lib/agents/agentColor";
 import { fmtUsd, runStatusVariant } from "@/lib/format";
-import { forceVoteNowAction, extendRoundsAction } from "./actions";
+import { forceVoteNowAction, extendRoundsAction, uploadDocumentAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
       },
       decisions: { orderBy: { decidedAt: "asc" } },
       artifacts: { orderBy: { createdAt: "asc" }, include: { createdByAgent: true, turn: true } },
+      documents: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!run) notFound();
@@ -58,29 +60,39 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
   // turns into one chronological sequence.
   type FeedItem =
     | { kind: "turn"; at: Date; turn: (typeof run.turns)[number] }
-    | { kind: "decision"; at: Date; decision: (typeof run.decisions)[number] };
+    | { kind: "decision"; at: Date; decision: (typeof run.decisions)[number] }
+    | { kind: "document"; at: Date; document: (typeof run.documents)[number] };
   const feed: FeedItem[] = [
     ...run.turns.map((t): FeedItem => ({ kind: "turn", at: t.createdAt, turn: t })),
     ...run.decisions.map((d): FeedItem => ({ kind: "decision", at: d.decidedAt, decision: d })),
+    ...run.documents.map((doc): FeedItem => ({ kind: "document", at: doc.createdAt, document: doc })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
   // Plain, serializable metadata for LiveTranscript to diff between polls
   // -- Turn/Decision carry Prisma Decimal fields that can't cross the
   // server/client boundary as props, so only ids/labels/anchors travel;
   // the actual rendered rows are passed through as `children` instead.
-  const feedMeta = feed.map((item) =>
-    item.kind === "turn"
-      ? {
-          id: item.turn.id,
-          anchorId: `turn-${item.turn.sequenceNumber}`,
-          label: `New turn from ${item.turn.agent.displayName}`,
-        }
-      : {
-          id: item.decision.id,
-          anchorId: `decision-${item.decision.id}`,
-          label: "Decision reached",
-        },
-  );
+  const feedMeta = feed.map((item) => {
+    if (item.kind === "turn") {
+      return {
+        id: item.turn.id,
+        anchorId: `turn-${item.turn.sequenceNumber}`,
+        label: `New turn from ${item.turn.agent.displayName}`,
+      };
+    }
+    if (item.kind === "decision") {
+      return {
+        id: item.decision.id,
+        anchorId: `decision-${item.decision.id}`,
+        label: "Decision reached",
+      };
+    }
+    return {
+      id: item.document.id,
+      anchorId: `document-${item.document.id}`,
+      label: `${item.document.filename} shared`,
+    };
+  });
 
   return (
     <div className="min-h-screen bg-canvas text-text-primary">
@@ -120,6 +132,44 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               )}
             </div>
           )}
+          {run.status === "ACTIVE" && (
+            <form
+              action={uploadDocumentAction}
+              className="space-y-2 rounded-md border border-border p-3"
+            >
+              <input type="hidden" name="runId" value={run.id} />
+              <div>
+                <label className="mb-1 block text-xs text-text-tertiary">
+                  Share a file (text or image, 5MB max)
+                </label>
+                <input
+                  type="file"
+                  name="file"
+                  required
+                  className="block w-full text-xs text-text-secondary file:mr-3 file:rounded-sm file:border-0 file:bg-accent/10 file:px-3 file:py-1.5 file:text-xs file:text-accent"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-text-secondary">
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" name="shareMode" value="all" defaultChecked className="accent-accent" />
+                  All agents
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" name="shareMode" value="specific" className="accent-accent" />
+                  Just:
+                </label>
+                {run.agents.map((a) => (
+                  <label key={a.id} className="flex items-center gap-1">
+                    <input type="checkbox" name="agentIds" value={a.id} className="accent-accent" />
+                    {a.displayName}
+                  </label>
+                ))}
+              </div>
+              <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
+                Upload
+              </Button>
+            </form>
+          )}
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {run.agents.map((a) => (
               <span
@@ -141,7 +191,12 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
               <p className="text-sm text-text-tertiary">No turns yet — start the run to begin.</p>
             )}
             {feed.map((item, index) => {
-              const key = item.kind === "turn" ? item.turn.id : item.decision.id;
+              const key =
+                item.kind === "turn"
+                  ? item.turn.id
+                  : item.kind === "decision"
+                    ? item.decision.id
+                    : item.document.id;
               // Roving tabindex + the ARIA "feed" pattern's aria-posinset/
               // aria-setsize -- see docs/design-system.md, "Long-transcript
               // performance/accessibility." Only the first item starts as
@@ -160,7 +215,7 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                         posinset={posinset}
                         setsize={setsize}
                       />
-                    ) : (
+                    ) : item.kind === "decision" ? (
                       <DecisionBreak
                         decision={item.decision}
                         agentNameById={agentNameById}
@@ -168,6 +223,10 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
                         posinset={posinset}
                         setsize={setsize}
                       />
+                    ) : (
+                      <div id={`document-${item.document.id}`}>
+                        <DocumentShared document={item.document} agentNameById={agentNameById} />
+                      </div>
                     )}
                   </NewItemFade>
                 </div>

@@ -61,3 +61,67 @@ export async function extendRoundsAction(formData: FormData): Promise<void> {
   });
   revalidatePath(`/runs/${runId}`);
 }
+
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const ALLOWED_TEXT_MIME_TYPES = new Set(["text/plain", "text/markdown", "text/csv", "application/json"]);
+const TEXT_EXTENSIONS = [".txt", ".md", ".markdown", ".csv", ".json"];
+
+// Browsers don't reliably set `type` for text-ish files (many report ""
+// for .md), so extension is a real fallback here, not just a nicety.
+function detectDocumentKind(file: File): "TEXT" | "IMAGE" | null {
+  if (ALLOWED_IMAGE_MIME_TYPES.has(file.type)) return "IMAGE";
+  const name = file.name.toLowerCase();
+  if (ALLOWED_TEXT_MIME_TYPES.has(file.type) || TEXT_EXTENSIONS.some((ext) => name.endsWith(ext))) {
+    return "TEXT";
+  }
+  return null;
+}
+
+// Admin-side context injection, available any time a run is active --
+// scoped to every agent by default, or a chosen subset. See
+// documentsForAgent in lib/agents/engine.ts for how visibility is
+// enforced when a turn's prompt is actually built.
+export async function uploadDocumentAction(formData: FormData): Promise<void> {
+  const runId = String(formData.get("runId"));
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    throw new Error("Choose a file to upload.");
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error(`File is too large -- ${MAX_FILE_BYTES / (1024 * 1024)}MB max.`);
+  }
+
+  const kind = detectDocumentKind(file);
+  if (!kind) {
+    throw new Error(
+      "Unsupported file type -- text (.txt/.md/.csv/.json) and images (JPEG/PNG/GIF/WebP) are supported. PDFs and other document formats aren't yet.",
+    );
+  }
+
+  const shareMode = String(formData.get("shareMode") ?? "all");
+  const selectedAgentIds = formData.getAll("agentIds").map(String);
+  if (shareMode === "specific" && selectedAgentIds.length === 0) {
+    throw new Error('Pick at least one agent to share with, or choose "all".');
+  }
+
+  const content =
+    kind === "IMAGE" ? Buffer.from(await file.arrayBuffer()).toString("base64") : await file.text();
+
+  const maxSeq = await prisma.turn.aggregate({ where: { runId }, _max: { sequenceNumber: true } });
+
+  await prisma.document.create({
+    data: {
+      runId,
+      filename: file.name,
+      mimeType: file.type || "text/plain",
+      kind,
+      content,
+      sharedWithAll: shareMode !== "specific",
+      accessAgentIds: shareMode === "specific" ? selectedAgentIds : undefined,
+      introducedAfterSequenceNumber: maxSeq._max.sequenceNumber ?? 0,
+    },
+  });
+
+  revalidatePath(`/runs/${runId}`);
+}

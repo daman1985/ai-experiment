@@ -81,15 +81,34 @@ export const openaiAdapter: ProviderAdapter = {
       }
     }
 
+    const turnText = buildTurnPrompt({
+      transcript: input.transcript,
+      selfRoomLabel: input.selfRoomLabel,
+      researchNote,
+      documents: input.documents,
+    });
+    const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
+
     const turnResponse = await client.responses.parse({
       model: input.modelId,
       instructions: input.systemPrompt,
       text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
-      input: buildTurnPrompt({
-        transcript: input.transcript,
-        selfRoomLabel: input.selfRoomLabel,
-        researchNote,
-      }),
+      input:
+        imageDocs.length === 0
+          ? turnText
+          : [
+              {
+                role: "user" as const,
+                content: [
+                  { type: "input_text" as const, text: turnText },
+                  ...imageDocs.map((d) => ({
+                    type: "input_image" as const,
+                    image_url: `data:${d.mimeType};base64,${d.content}`,
+                    detail: "auto" as const,
+                  })),
+                ],
+              },
+            ],
     });
 
     inputTokens += turnResponse.usage?.input_tokens ?? 0;

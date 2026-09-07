@@ -83,6 +83,14 @@ export const anthropicAdapter: ProviderAdapter = {
       researchNote = textParts.join("\n").trim() || null;
     }
 
+    const turnText = buildTurnPrompt({
+      transcript: input.transcript,
+      selfRoomLabel: input.selfRoomLabel,
+      researchNote,
+      documents: input.documents,
+    });
+    const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
+
     const turnResponse = await client.messages.parse({
       model: input.modelId,
       max_tokens: TURN_MAX_TOKENS,
@@ -91,11 +99,20 @@ export const anthropicAdapter: ProviderAdapter = {
       messages: [
         {
           role: "user",
-          content: buildTurnPrompt({
-            transcript: input.transcript,
-            selfRoomLabel: input.selfRoomLabel,
-            researchNote,
-          }),
+          content:
+            imageDocs.length === 0
+              ? turnText
+              : [
+                  { type: "text", text: turnText },
+                  ...imageDocs.map((d) => ({
+                    type: "image" as const,
+                    source: {
+                      type: "base64" as const,
+                      media_type: d.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                      data: d.content,
+                    },
+                  })),
+                ],
         },
       ],
     });

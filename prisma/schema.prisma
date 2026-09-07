@@ -30,6 +30,11 @@ enum DecisionMethod {
   MAJORITY_VOTE // round cap was hit; resolved by explicit vote
 }
 
+enum DocumentKind {
+  TEXT // content is the raw/extracted text, injected as prompt text
+  IMAGE // content is base64-encoded image bytes, sent as multimodal content
+}
+
 // Encrypted API keys + default model/budget config, set once via the
 // admin settings page. One row per provider. Keys are AES-256-GCM
 // encrypted with a server-side key (ENCRYPTION_KEY env var) -- never
@@ -127,6 +132,38 @@ model Run {
   turns     Turn[]
   decisions Decision[]
   artifacts Artifact[]
+  documents Document[]
+}
+
+// Admin-uploaded context, introduced at any point during an active run --
+// distinct from Artifact (agent-produced collateral): a Document is
+// always admin-sourced input, never retroactively rewritten into turns
+// that already happened, and can be scoped to only some agents rather
+// than always being universally visible.
+model Document {
+  id       String       @id @default(cuid())
+  runId    String
+  run      Run          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  filename String
+  mimeType String
+  kind     DocumentKind
+  // TEXT: the extracted/raw text itself. IMAGE: base64-encoded bytes --
+  // stored as text rather than Bytes since every provider's multimodal
+  // content format wants base64 anyway, so there's no conversion to do
+  // at either write or read time.
+  content  String
+
+  // true (default) = every agent in the run, present and any added
+  // later, can see this. false = only the agents in accessAgentIds can.
+  sharedWithAll  Boolean @default(true)
+  accessAgentIds Json? // string[] of Agent.id -- read only when sharedWithAll is false
+
+  // The run's max Turn.sequenceNumber at the moment this was uploaded.
+  // Turns already spoken before this point never see it; every later
+  // turn from an agent with access gets it injected into their prompt.
+  introducedAfterSequenceNumber Int
+
+  createdAt DateTime @default(now())
 }
 
 model Agent {

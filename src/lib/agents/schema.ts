@@ -70,6 +70,17 @@ export interface ToolCallLogEntry {
   resultSummary: string;
 }
 
+// Admin-shared context, already scoped down to whatever the calling
+// agent has access to (see engine.ts) by the time a provider adapter
+// sees it -- an adapter never needs to check visibility itself.
+export interface DocumentForPrompt {
+  filename: string;
+  kind: "TEXT" | "IMAGE";
+  mimeType: string;
+  // TEXT: raw text content. IMAGE: base64-encoded bytes.
+  content: string;
+}
+
 export interface TranscriptEntryForPrompt {
   speakerRoomLabel: string;
   message: string;
@@ -89,6 +100,10 @@ export interface RunTurnInput {
   otherRoomLabels: string[];
   enableResearch: boolean;
   isForcedVote: boolean;
+  // Already filtered to what this specific agent has access to. Attached
+  // only to the main turn call, not the research call -- research is
+  // about grounding via search, not visual analysis.
+  documents: DocumentForPrompt[];
 }
 
 export interface RunTurnResult {
