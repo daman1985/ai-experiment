@@ -260,10 +260,69 @@ Notes on how each "ours to invent" decision landed in code:
 Verified visually via Playwright against a real run with real turns,
 yields, and an artifact; a synthetic `Decision` row was inserted and
 then removed from the local dev DB purely to check the decision-break
-rendering (this run has none yet). Remaining: Phase 5 (motion/
-accessibility — `aria-live`, keyboard nav, roving tabindex for a future
-virtualized list) and Phase 6 (real-content validation once a run
-produces enough transcript to stress-test the layout for real).
+rendering (this run has none yet).
+
+**Phase 5 (motion/accessibility) is done** — replaced `src/app/runs/
+[id]/AutoRefresh.tsx` (deleted) with `src/components/transcript/
+LiveTranscript.tsx`, which now owns the 20s poll plus everything the
+live feed needs to behave well for a long-running session:
+
+- **`aria-live="polite"` announcements**: a dedicated visually-hidden
+  (`sr-only`) live region, kept separate from the visible feed so
+  unrelated re-renders never trigger spurious announcements. Only the
+  diff between polls is announced (e.g. "New turn from Claude", or "N
+  new updates in the transcript" when a batch lands at once) — never the
+  whole transcript re-announced on every refresh.
+- **"N new — jump to live"**: `LiveTranscript` tracks "following live"
+  (within 120px of the bottom of the document) via a scroll listener,
+  independent of the poll. If new items arrive while following live, the
+  page auto-scrolls to keep them in view; if the admin is scrolled up
+  reading backlog, nothing moves — a fixed, accent-colored pill appears
+  instead ("N new — jump to live") that scrolls to bottom on click. This
+  is a literal implementation of the already-decided "never steal the
+  viewport" bullet under Borrowed craft, not a new decision.
+- **New-live-event motion**: `NewItemFade` (in the same file) wraps each
+  feed item and decides once, at mount time, whether to animate — using
+  React's own mount timing rather than timestamps: every item present at
+  initial load mounts before the "initial load is done" ref flips true,
+  so it never animates; only items whose component instances are created
+  by a later `router.refresh()` are eligible, and only if the admin was
+  following live at that moment. Motion is the exact token from the
+  Motion tokens table (`--animate-turn-enter` in `globals.css`, 120ms
+  ease-out, opacity + `translateY(2px)` → 0).
+- **Roving tabindex / keyboard nav**: `TurnRow` and `DecisionBreak` are
+  now `role="article"` with `aria-posinset`/`aria-setsize` (ready for
+  virtualization later) inside a `role="feed"` section. One article is
+  `tabIndex=0` at a time; `LiveTranscript` maintains that invariant via
+  focus-event delegation (so both arrow-key movement and a direct click
+  land correctly) and moves focus with ArrowUp/ArrowDown.
+- **Focus-visible states**: turn/decision rows get an inset accent ring
+  (`focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-
+  accent` — inset because these are edge-to-edge rows, not discrete
+  controls, so a normal offset ring would clip); the artifact
+  `<details>/<summary>` disclosures (both the inline transcript preview
+  and the bottom Artifacts section) and the "View in transcript" link
+  all got the same ring treatment as `Button`/`Input`.
+- **`prefers-reduced-motion`**: handled via Tailwind's `motion-safe:`
+  variant on the entrance animation class, confirmed in the compiled CSS
+  to be wrapped in `@media (prefers-reduced-motion: no-preference)` — no
+  JS media-query branching needed. The JS-side "should this item
+  animate" decision and the CSS-side "is motion actually allowed"
+  decision are intentionally separate concerns.
+
+Verified with Playwright against the real run (`Test run 1`): inserted
+throwaway `Turn` rows via `psql` while the page was open (both scrolled
+to bottom and scrolled to top), waited out a real 20s poll cycle, and
+confirmed — auto-scroll + no pill when following live; pill with correct
+count + no scroll when reading backlog; roving tabindex/`aria-posinset`/
+`aria-setsize` values and ArrowDown focus movement; the entrance
+animation class present with `animation-name: none` computed under
+`prefers-reduced-motion: reduce`; and that items already on the page at
+load time never receive the animation wrapper at all. All throwaway rows
+were deleted afterward (`Test run 1` is back to its original 4 turns).
+
+Remaining: Phase 6 (real-content validation once a run produces enough
+transcript to stress-test the layout for real).
 
 Spacing and motion deliberately do **not** have custom tokens — Tailwind
 v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly

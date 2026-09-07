@@ -9,7 +9,7 @@ export function ArtifactInlinePreview({ artifact }: { artifact: Artifact }) {
 
   return (
     <details className="group mt-3 rounded-md border border-border bg-surface">
-      <summary className="cursor-pointer list-none px-3 py-2 text-sm">
+      <summary className="cursor-pointer list-none rounded-md px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent">
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-2">
             <Badge variant="neutral">{artifact.type}</Badge>

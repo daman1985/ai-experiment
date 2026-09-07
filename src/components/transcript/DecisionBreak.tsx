@@ -22,18 +22,33 @@ function isDissentArray(value: unknown): value is DissentEntry[] {
 export function DecisionBreak({
   decision,
   agentNameById,
+  tabIndex,
+  posinset,
+  setsize,
 }: {
   decision: Decision;
   agentNameById: Map<string, string>;
+  tabIndex: number;
+  posinset: number;
+  setsize: number;
 }) {
   const dissent = isDissentArray(decision.dissent) ? decision.dissent : [];
+  const methodLabel = decision.method === "CONSENSUS" ? "Consensus" : "Forced vote";
 
   return (
-    <div className="my-8 border-y border-border bg-surface-hover px-4 py-6 sm:px-6">
+    <div
+      id={`decision-${decision.id}`}
+      role="article"
+      aria-posinset={posinset}
+      aria-setsize={setsize}
+      aria-label={`Decision reached: ${methodLabel}`}
+      tabIndex={tabIndex}
+      className="my-8 border-y border-border bg-surface-hover px-4 py-6 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent sm:px-6"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-serif text-lg text-text-primary">Decision reached</span>
         <Badge variant={decision.method === "CONSENSUS" ? "success" : "warning"}>
-          {decision.method === "CONSENSUS" ? "Consensus" : "Forced vote"}
+          {methodLabel}
         </Badge>
       </div>
       <p className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-text-primary">

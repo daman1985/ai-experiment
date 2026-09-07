@@ -106,6 +106,24 @@
   --radius-xl: 10px; /* dialog */
   /* transcript rows and table rows use rounded-none (0px) directly --
      they're a continuous surface, not cards. */
+
+  /* Motion tokens table, "new live event": ~120ms, opacity +
+     translateY(2px) -> 0, only while following live. Applied via
+     `motion-safe:animate-turn-enter` (see LiveTranscript.tsx) so
+     `prefers-reduced-motion` disables it automatically -- never a
+     persistent/looping animation, just a one-shot entrance. */
+  --animate-turn-enter: turn-enter 120ms ease-out;
+}
+
+@keyframes turn-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 body {

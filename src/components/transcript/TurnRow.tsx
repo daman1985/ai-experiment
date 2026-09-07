@@ -16,14 +16,35 @@ type TurnWithRelations = Turn & {
 // every single message"). The avatar column stays at a fixed left edge
 // across every row so a long reading session doesn't require re-finding
 // where the message content starts.
-export function TurnRow({ turn }: { turn: TurnWithRelations }) {
+//
+// `tabIndex`/`posinset`/`setsize` implement the roving-tabindex ARIA
+// "feed" pattern from docs/design-system.md's "Long-transcript
+// performance/accessibility" -- one row is a tab stop at a time, the
+// rest are `-1`, with `aria-posinset`/`aria-setsize` so a screen reader
+// still understands the true document length once this is virtualized.
+export function TurnRow({
+  turn,
+  tabIndex,
+  posinset,
+  setsize,
+}: {
+  turn: TurnWithRelations;
+  tabIndex: number;
+  posinset: number;
+  setsize: number;
+}) {
   const styles = AGENT_STYLES[turn.agent.provider];
   const hasStatus = turn.readyToDecide || turn.yieldToAgent || turn.isVote;
 
   return (
     <div
       id={`turn-${turn.sequenceNumber}`}
-      className={`border-b border-l-2 border-border py-4 pl-4 pr-1 last:border-b-0 ${styles.rowBg} ${styles.rowBorder}`}
+      role="article"
+      aria-posinset={posinset}
+      aria-setsize={setsize}
+      aria-label={`${turn.agent.displayName}, round ${turn.roundNumber + 1}`}
+      tabIndex={tabIndex}
+      className={`border-b border-l-2 border-border py-4 pl-4 pr-1 outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${styles.rowBg} ${styles.rowBorder}`}
     >
       <div className="grid grid-cols-[2rem_1fr] gap-3">
         <AgentAvatar provider={turn.agent.provider} displayName={turn.agent.displayName} />
