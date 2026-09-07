@@ -1,26 +1,119 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens -- see docs/design-system.md for the full rationale and
+ * decision record. This file is Phase 1 of that plan: the substrate only.
+ * No component has been updated to use these yet (that's Phases 2-4) --
+ * the app will still look like the old dark theme until then.
+ *
+ * Deliberately NOT reinventing spacing/duration scales here: Tailwind's
+ * own default spacing scale (0.5/1/2/3/4/6/8/10/12 -> 2/4/8/12/16/24/32/
+ * 40/48px) and duration scale (100/150/200ms) already match what the
+ * design doc calls for almost exactly. Use those stock utilities
+ * directly (p-4, gap-2, duration-150, etc.) rather than parallel custom
+ * tokens -- fewer moving parts to keep in sync.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Neutral surfaces -- light theme only, no dark-mode variant. The old
+     dark theme was never a deliberate design choice, just the
+     create-next-app default never revisited -- see design doc. */
+  --color-canvas: #f7f8fa; /* page background */
+  --color-surface: #ffffff; /* cards, the transcript reading column */
+  --color-surface-hover: #f2f4f7;
+  --color-border: #e3e6ea;
+
+  --color-text-primary: #17191c; /* not pure black -- see design doc */
+  --color-text-secondary: #5f6670;
+  --color-text-tertiary: #9aa1ab;
+
+  /* The one accent -- deep teal/petrol, decided in docs/design-system.md.
+     Interactive/actionable signals only: primary buttons, active nav
+     state, focus rings. Never static text, never decorative, never used
+     for agent identity (agents have their own colors below). */
+  --color-accent: #0f6b67;
+  --color-accent-hover: #0c5754;
+  --color-accent-active: #0a4644;
+
+  /* Semantic status -- paired bg/text, always used with an icon and a
+     text label too (redundant cues, never color alone -- WCAG + the
+     design doc's explicit rule). */
+  --color-success-bg: #ecfdf3;
+  --color-success-text: #067647;
+  --color-warning-bg: #fff7ed;
+  --color-warning-text: #b45309;
+  --color-error-bg: #fef2f2;
+  --color-error-text: #b42318;
+  --color-neutral-badge-bg: #f3f4f6;
+  --color-neutral-badge-text: #4b5563;
+
+  /* Per-agent identity colors -- three-opacity-tier system (decided in
+     docs/design-system.md). Each is ONE base hue; don't precompute
+     separate tint/border shades by hand -- Tailwind v4 generates them
+     from opacity modifiers automatically, e.g.:
+       text-agent-claude        (full opacity -- name label only)
+       bg-agent-claude/6        (6% tint -- row background wash)
+       border-agent-claude/20   (20% -- separation, not decoration)
+     Chosen to sit clearly apart from each other AND from the accent
+     (blue-green) and the status hues above (pure green/amber/red) so
+     nothing reads as "is this an agent or a status?". */
+  --color-agent-claude: #b5654a; /* warm clay/terracotta */
+  --color-agent-gpt: #55678c; /* muted slate blue */
+  --color-agent-gemini: #8a5a7a; /* muted plum */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-canvas: var(--color-canvas);
+  --color-surface: var(--color-surface);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-border: var(--color-border);
+
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-tertiary: var(--color-text-tertiary);
+
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-active: var(--color-accent-active);
+
+  --color-success-bg: var(--color-success-bg);
+  --color-success-text: var(--color-success-text);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-warning-text: var(--color-warning-text);
+  --color-error-bg: var(--color-error-bg);
+  --color-error-text: var(--color-error-text);
+  --color-neutral-badge-bg: var(--color-neutral-badge-bg);
+  --color-neutral-badge-text: var(--color-neutral-badge-text);
+
+  --color-agent-claude: var(--color-agent-claude);
+  --color-agent-gpt: var(--color-agent-gpt);
+  --color-agent-gemini: var(--color-agent-gemini);
+
+  /* Fonts. --font-sans/--font-mono already point at Geist via the
+     layout's next/font variables. --font-serif is Tailwind's own
+     namespace key, repointed to Newsreader for headers/titles per the
+     design doc, so the stock `font-serif` utility just works. */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
+  --font-serif: var(--font-newsreader);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Radius discipline (docs/design-system.md) -- overrides Tailwind's
+     defaults to match exactly instead of the generic uniform-8px scale
+     that's one of the "looks AI-generated" tells. */
+  --radius-sm: 5px; /* badges */
+  --radius-md: 6px; /* ordinary controls */
+  --radius-lg: 8px; /* popover/menu, major dashboard panel */
+  --radius-xl: 10px; /* dialog */
+  /* transcript rows and table rows use rounded-none (0px) directly --
+     they're a continuous surface, not cards. */
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
 }
+
+/* Reminder, not a new rule: Tailwind already ships a `tabular-nums`
+   utility (font-variant-numeric). Use it directly on every numeric
+   display -- spend figures, budgets, timestamps, token counts -- rather
+   than reaching for inline styles. */

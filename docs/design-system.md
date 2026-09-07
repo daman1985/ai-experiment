@@ -193,13 +193,31 @@ All "ours to invent" decisions are now resolved as of this pass. Any
 new one that comes up during implementation should be added here and
 brought to the admin the same way, not decided in code.
 
+## Implementation status
+
+**Phase 1 (token foundation) is done**, in `src/app/globals.css` (`@theme
+inline` block) and `src/app/layout.tsx` (Newsreader font). Verified: a
+throwaway test page confirmed every overridden utility (`rounded-md`,
+`rounded-sm`, `rounded-xl`, `font-serif`, `bg-accent`,
+`text-agent-claude`) compiles to the exact intended value, not just that
+the build succeeds. No component has been updated to consume these yet
+— the app still looks like the old dark theme visually. That's Phases
+2-4 (shared primitives, then Settings/Dashboard, then the Transcript).
+
+Spacing and motion deliberately do **not** have custom tokens — Tailwind
+v4's own default spacing scale (0.5/1/2/3/4/6/8/10/12 → exactly
+2/4/8/12/16/24/32/40/48px) and duration scale (100/150/200ms) already
+match what's specified below almost exactly. Use those stock utilities
+directly rather than inventing parallel ones.
+
 ## Engineering specs (safe to build against directly)
 
-**Spacing.** 4px sub-grid, 8px common rhythm:
-`2 / 4 / 8 / 12 / 16 / 24 / 32 / 40 / 48`.
+**Spacing.** Use Tailwind's stock scale directly — `p-0.5`/`gap-1`/
+etc. map to `2 / 4 / 8 / 12 / 16 / 24 / 32 / 40 / 48`px, matching this
+exactly. No custom spacing tokens (see Implementation status above).
 
-**Type scale** (exact typeface TBD — see "ours to invent" — but the
-scale/rhythm below is settled):
+**Type scale** (typeface: Newsreader serif for headers via `font-serif`,
+Geist Sans for body/data as the default `font-sans` — decided above):
 
 | Element | Size | Line-height | Weight |
 |---|---:|---:|---:|
@@ -214,15 +232,15 @@ Monospace only for genuinely technical identifiers (model IDs, raw tool
 call arguments) — never for all metadata just because this is an AI
 tool.
 
-**Radius discipline** (avoid uniform-8px-everywhere):
+**Radius discipline** (avoid uniform-8px-everywhere) — implemented as
+Tailwind's own `rounded-*` scale, overridden in `globals.css`:
 
 ```
-ordinary controls      6px
-badges                  5–6px, or pill only where semantically apt
-popover/menu            8–10px
-dialog                  10–12px
-transcript row          0px (continuous surface, not cards)
-major dashboard panel   8px
+rounded-sm    5px   badges
+rounded-md    6px   ordinary controls
+rounded-lg    8px   popover/menu, major dashboard panel
+rounded-xl    10px  dialog
+rounded-none  0px   transcript row, table row (continuous surface, not cards)
 ```
 
 **Motion tokens:**
