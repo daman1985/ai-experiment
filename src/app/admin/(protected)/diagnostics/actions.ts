@@ -9,6 +9,14 @@ import { logDiagnostic } from "@/lib/diagnostics";
 import { buildSystemPrompt, buildResearchPrompt, buildTurnPrompt } from "@/lib/agents/prompt";
 import { turnOutputSchema } from "@/lib/agents/schema";
 
+// Wipes every recorded event so the next action's output is unambiguous
+// -- otherwise fresh results sit above a growing pile of old ones and
+// it's easy to mistake a stale error for a new one at a glance.
+export async function clearDiagnosticsAction(): Promise<void> {
+  await prisma.diagnosticEvent.deleteMany({});
+  revalidatePath("/admin/diagnostics");
+}
+
 // A full diagnostic battery, run in one shot -- built after several
 // rounds of one-variable-at-a-time checks each requiring their own
 // deploy cycle, which was the right instinct (test one thing before

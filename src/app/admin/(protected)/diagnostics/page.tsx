@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { runRealPromptCheckAction } from "./actions";
+import { runRealPromptCheckAction, clearDiagnosticsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 // The "run diagnostic call" action below fires a full battery of real
@@ -80,17 +80,25 @@ export default async function DiagnosticsPage({
         </div>
       </div>
 
-      <form action={runRealPromptCheckAction}>
-        <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
-          Run full diagnostic battery
-        </Button>
-        <p className="mt-1 text-xs text-text-tertiary">
-          Fires 8 real Anthropic calls in parallel against the configured key -- trivial vs. real
-          system prompt, with/without tools/schema, a length-matched but unrelated control prompt,
-          and each half of the real prompt -- to isolate exactly what's causing the hang in one
-          pass. Takes up to ~20 seconds; results appear below once the page reloads.
-        </p>
-      </form>
+      <div className="flex flex-wrap items-start gap-2">
+        <form action={runRealPromptCheckAction}>
+          <Button type="submit" variant="secondary" className="px-3 py-1 text-xs">
+            Run full diagnostic battery
+          </Button>
+        </form>
+        <form action={clearDiagnosticsAction}>
+          <Button type="submit" variant="danger" className="px-3 py-1 text-xs">
+            Clear log
+          </Button>
+        </form>
+      </div>
+      <p className="text-xs text-text-tertiary">
+        &quot;Run full diagnostic battery&quot; fires several real Anthropic calls in parallel
+        against the configured key to isolate exactly what's causing a hang -- takes up to ~20
+        seconds; results appear below once the page reloads. &quot;Clear log&quot; deletes every
+        recorded event so far, so the next run's output isn't mixed in with old ticks/errors --
+        it doesn't affect the app itself, only this log.
+      </p>
 
       <form className="flex flex-wrap gap-2 text-sm" action="/admin/diagnostics">
         <input
