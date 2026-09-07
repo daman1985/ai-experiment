@@ -45,14 +45,28 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
     run.agents.reduce((sum, a) => sum + Number(a.spendUsd), 0) + Number(run.systemSpendUsd);
 
   const activeAgents = run.agents.filter((a) => a.isActive);
+
+  // Mirrors turnsSinceLastDecision in lib/agents/engine.ts exactly: the
+  // round-cap window resets at whichever is more recent, the last
+  // decision or an admin's manual "continue N more rounds" (see
+  // extendRoundsAction). Surfaced on the page so clicking that button
+  // has a visible effect even when nothing was already stuck -- without
+  // this, the click succeeds but nothing on screen ever changes.
+  const lastDecision = [...run.decisions].sort(
+    (a, b) => b.afterSequenceNumber - a.afterSequenceNumber,
+  )[0];
+  const roundCapBaseline = Math.max(
+    lastDecision?.afterSequenceNumber ?? 0,
+    run.extendedAtSequenceNumber,
+  );
+  const turnsSinceBaseline = run.turns.filter((t) => t.sequenceNumber > roundCapBaseline).length;
+  const roundsElapsed =
+    activeAgents.length > 0 ? Math.floor(turnsSinceBaseline / activeAgents.length) : 0;
+  const roundsRemaining = Math.max(0, run.forcedVoteRoundCap - roundsElapsed);
+
   let currentAgentId: string | null = null;
   if ((run.status === "ACTIVE" || run.status === "PAUSED") && activeAgents.length >= 2) {
-    const lastDecision = [...run.decisions].sort(
-      (a, b) => b.afterSequenceNumber - a.afterSequenceNumber,
-    )[0];
-    const turnsSinceDecision = run.turns.filter(
-      (t) => t.sequenceNumber > (lastDecision?.afterSequenceNumber ?? 0),
-    ).length;
+    const turnsSinceDecision = turnsSinceBaseline;
     // Mirrors the rotating-first-speaker formula in lib/agents/engine.ts
     // exactly, so the stepper never drifts from what the next cron tick
     // will actually do.
@@ -131,6 +145,13 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
           </div>
           {(run.status === "ACTIVE" || run.status === "COMPLETED") && (
             <div className="flex flex-wrap items-center gap-2">
+              {run.status === "ACTIVE" && (
+                <span className="text-xs tabular-nums text-text-tertiary">
+                  {run.forcedVotePending
+                    ? "Forced vote pending —"
+                    : `${roundsRemaining} of ${run.forcedVoteRoundCap} rounds left before a forced vote —`}
+                </span>
+              )}
               {run.status === "ACTIVE" && !run.forcedVotePending && (
                 <form action={forceVoteNowAction}>
                   <input type="hidden" name="runId" value={run.id} />
