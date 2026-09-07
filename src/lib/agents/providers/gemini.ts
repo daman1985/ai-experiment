@@ -87,9 +87,16 @@ export const geminiAdapter: ProviderAdapter = {
         outputTokens += researchResponse.usageMetadata?.candidatesTokenCount ?? 0;
         researchNote = researchResponse.text?.trim() || null;
 
-        const queries = researchResponse.candidates?.[0]?.groundingMetadata?.webSearchQueries ?? [];
+        const grounding = researchResponse.candidates?.[0]?.groundingMetadata;
+        const queries = grounding?.webSearchQueries ?? [];
+        const chunkSummary =
+          (grounding?.groundingChunks ?? [])
+            .slice(0, 3)
+            .map((c) => c.web?.title || c.web?.uri || "")
+            .filter(Boolean)
+            .join("; ") || "(no source details available)";
         for (const query of queries) {
-          toolCalls.push({ query, resultSummary: "" });
+          toolCalls.push({ query, resultSummary: chunkSummary });
         }
       } catch (err) {
         researchNote = null;

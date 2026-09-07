@@ -46,12 +46,30 @@ export const openaiAdapter: ProviderAdapter = {
         outputTokens += researchResponse.usage?.output_tokens ?? 0;
         researchNote = researchResponse.output_text?.trim() || null;
 
+        // Search results themselves aren't attached to the web_search_call
+        // item -- they surface as url_citation annotations on the message
+        // text that follows it. Collected separately and applied to every
+        // search logged this call, since there's no clean call-to-citation
+        // mapping exposed.
+        const citationTitles: string[] = [];
         for (const item of researchResponse.output ?? []) {
           if (item.type === "web_search_call") {
             const action = (item as { action?: { query?: string } }).action;
             toolCalls.push({ query: action?.query ?? "(unknown query)", resultSummary: "" });
+          } else if (item.type === "message") {
+            for (const part of (item as { content?: unknown[] }).content ?? []) {
+              const annotations = (part as { annotations?: unknown[] }).annotations ?? [];
+              for (const ann of annotations) {
+                const a = ann as { type?: string; title?: string; url?: string };
+                if (a.type === "url_citation" && (a.title || a.url)) {
+                  citationTitles.push(a.title || a.url || "");
+                }
+              }
+            }
           }
         }
+        const citationSummary = citationTitles.slice(0, 3).join("; ") || "(no source details available)";
+        for (const tc of toolCalls) tc.resultSummary = citationSummary;
       } catch (err) {
         // Research is a best-effort enhancement, not required for the turn
         // to proceed -- don't let a tool/API surface change block the run.

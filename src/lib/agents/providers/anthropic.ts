@@ -62,13 +62,21 @@ export const anthropicAdapter: ProviderAdapter = {
           const last = toolCalls[toolCalls.length - 1];
           if (last) {
             const content = block.content;
-            last.resultSummary = Array.isArray(content)
-              ? content
+            if (Array.isArray(content)) {
+              last.resultSummary =
+                content
                   .slice(0, 3)
                   .map((r) => ("title" in r ? r.title : ""))
                   .filter(Boolean)
-                  .join("; ")
-              : "(search error)";
+                  .join("; ") || "(no source details available)";
+            } else {
+              // A real typed error from Anthropic's search tool (rate
+              // limited, query too long, service unavailable, etc.) --
+              // surface the actual code instead of a blanket "search
+              // error" that hides whether this is a fluke or chronic.
+              const errorCode = (content as { error_code?: string })?.error_code;
+              last.resultSummary = errorCode ? `search failed: ${errorCode}` : "(search failed)";
+            }
           }
         }
       }
