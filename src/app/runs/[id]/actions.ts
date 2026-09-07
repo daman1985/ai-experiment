@@ -63,31 +63,18 @@ export async function forceVoteNowAction(formData: FormData): Promise<void> {
 // the round-cap clock reset to now via extendedAtSequenceNumber.
 export async function extendRoundsAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("runId"));
-  // TEMPORARY: diagnosing a report that this button has no visible
-  // effect -- these land in Vercel's runtime logs (server-side, this is
-  // a Server Action) so we can see exactly what happened on a real click
-  // instead of guessing. Remove once confirmed working.
-  console.log(`[extendRoundsAction] invoked, runId=${runId}`);
-  const run = await prisma.run.findUnique({
-    where: { id: runId },
-    select: { status: true, forcedVotePending: true, forcedVoteRoundCap: true },
-  });
-  console.log(`[extendRoundsAction] fetched run:`, run);
+  const run = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
   // Only meaningful for a run that's still going (cancelling an
   // about-to-happen vote) or one that just wrapped up (reopening it) --
   // a manually stopped or budget-exhausted run needs a real decision to
   // resume, not this button.
-  if (!run || (run.status !== "ACTIVE" && run.status !== "COMPLETED")) {
-    console.log(`[extendRoundsAction] bailing out -- run missing or status not eligible`);
-    return;
-  }
+  if (!run || (run.status !== "ACTIVE" && run.status !== "COMPLETED")) return;
 
   const maxSeq = await prisma.turn.aggregate({
     where: { runId },
     _max: { sequenceNumber: true },
   });
-  console.log(`[extendRoundsAction] maxSeq=${maxSeq._max.sequenceNumber}`);
-  const updated = await prisma.run.update({
+  await prisma.run.update({
     where: { id: runId },
     data: {
       status: "ACTIVE",
@@ -98,14 +85,7 @@ export async function extendRoundsAction(formData: FormData): Promise<void> {
       extendedAtSequenceNumber: maxSeq._max.sequenceNumber ?? 0,
     },
   });
-  console.log(`[extendRoundsAction] updated run:`, {
-    id: updated.id,
-    status: updated.status,
-    forcedVotePending: updated.forcedVotePending,
-    extendedAtSequenceNumber: updated.extendedAtSequenceNumber,
-  });
   revalidatePath(`/runs/${runId}`);
-  console.log(`[extendRoundsAction] revalidated /runs/${runId}`);
 }
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
