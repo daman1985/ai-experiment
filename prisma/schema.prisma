@@ -90,6 +90,14 @@ model Run {
   roundNumber           Int     @default(0)
   forcedVotePending     Boolean @default(false)
 
+  // The round-cap "turns since the last decision" window is measured from
+  // here instead of from the last Decision when this is more recent --
+  // set to the run's current max Turn.sequenceNumber whenever the admin
+  // manually extends a run (see extendRoundsAction), which is how "give
+  // it N more rounds" and "un-complete this and keep going" both work
+  // without needing separate mechanisms.
+  extendedAtSequenceNumber Int @default(0)
+
   // Guards advanceRun against overlapping invocations -- the cron tick and
   // an admin's "watch live" polling (see LiveWatchToggle) can otherwise
   // race to take the same turn, paying for two LLM calls when only one

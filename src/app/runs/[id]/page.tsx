@@ -7,8 +7,10 @@ import { TurnStepper } from "@/components/transcript/TurnStepper";
 import { DecisionBreak } from "@/components/transcript/DecisionBreak";
 import { TurnRow } from "@/components/transcript/TurnRow";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { AGENT_STYLES } from "@/lib/agents/agentColor";
 import { fmtUsd, runStatusVariant } from "@/lib/format";
+import { forceVoteNowAction, extendRoundsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -96,6 +98,28 @@ export default async function RunViewerPage({ params }: { params: Promise<{ id: 
             </span>
             {run.status === "ACTIVE" && <LiveWatchToggle runId={run.id} />}
           </div>
+          {(run.status === "ACTIVE" || run.status === "COMPLETED") && (
+            <div className="flex flex-wrap items-center gap-2">
+              {run.status === "ACTIVE" && !run.forcedVotePending && (
+                <form action={forceVoteNowAction}>
+                  <input type="hidden" name="runId" value={run.id} />
+                  <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
+                    Force a decision now
+                  </Button>
+                </form>
+              )}
+              {(run.status === "COMPLETED" || run.forcedVotePending) && (
+                <form action={extendRoundsAction}>
+                  <input type="hidden" name="runId" value={run.id} />
+                  <Button type="submit" variant="secondary" className="px-2 py-1 text-xs">
+                    {run.status === "COMPLETED"
+                      ? `Reopen — continue ${run.forcedVoteRoundCap} more rounds`
+                      : `Cancel vote — continue ${run.forcedVoteRoundCap} more rounds`}
+                  </Button>
+                </form>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {run.agents.map((a) => (
               <span

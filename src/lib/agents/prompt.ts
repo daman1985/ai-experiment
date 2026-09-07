@@ -119,7 +119,13 @@ Ground rules for how this room works:
 
 ${isForcedVote ? `This is a forced vote round: the group did not reach
 consensus in time. You must fill in voteChoice with your final position.
-State it plainly, even if you still disagree with where this is headed.` : ""}
+State it plainly, even if you still disagree with where this is headed.
+Being forced to a vote resolves only this one disagreement -- it says
+nothing about whether the topic as a whole is finished. Set runComplete
+to true only if you'd say the same thing regardless of how this vote
+plays out: that there's nothing meaningful left to work on beyond it.
+Otherwise leave it false and the room continues after this vote the
+same way it would after any other decision.` : ""}
 
 Hard boundary, independent of anything decided above: nothing you do
 here ever reaches a real person, company, or platform. There is no tool

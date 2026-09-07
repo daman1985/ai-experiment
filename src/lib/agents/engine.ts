@@ -61,13 +61,14 @@ export async function advanceRun(runId: string): Promise<AdvanceResult> {
   }
 }
 
-async function turnsSinceLastDecision(runId: string): Promise<number> {
+async function turnsSinceLastDecision(run: Pick<Run, "id" | "extendedAtSequenceNumber">): Promise<number> {
   const lastDecision = await prisma.decision.findFirst({
-    where: { runId },
+    where: { runId: run.id },
     orderBy: { afterSequenceNumber: "desc" },
   });
+  const baseline = Math.max(lastDecision?.afterSequenceNumber ?? 0, run.extendedAtSequenceNumber);
   return prisma.turn.count({
-    where: { runId, sequenceNumber: { gt: lastDecision?.afterSequenceNumber ?? 0 } },
+    where: { runId: run.id, sequenceNumber: { gt: baseline } },
   });
 }
 
@@ -118,7 +119,7 @@ async function advanceRunLocked(runId: string): Promise<AdvanceResult> {
     return { action: "stopped", detail: "fewer than 2 active agents remain" };
   }
 
-  const turnsSinceDecision = await turnsSinceLastDecision(run.id);
+  const turnsSinceDecision = await turnsSinceLastDecision(run);
   // The starting seat rotates by round (rather than always seat 0) so no
   // single agent gets a permanent first-mover/anchoring advantage -- see
   // docs/design-system.md and the September 2026 model-selection research
