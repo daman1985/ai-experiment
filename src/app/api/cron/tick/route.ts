@@ -12,6 +12,17 @@ import { advanceRun } from "@/lib/agents/engine";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
+// A single run's worst case (research + turn, or two sequential
+// extraction calls) is ~35s even with the tightened per-call timeouts in
+// the provider adapters -- so two active runs processed sequentially
+// could still approach or exceed this route's 60s maxDuration if a tick
+// hits worst-case latency on both. A hard kill produces no response at
+// all (though turns already committed inside advanceRun aren't lost --
+// each is its own transaction), so it's better to stop starting new runs
+// once there isn't enough of the budget left and let the rest wait for
+// the next tick 10 minutes later, than to gamble on a hard kill.
+const TICK_BUDGET_MS = 45_000;
+
 export async function GET(request: NextRequest) {
   const configuredSecret = process.env.CRON_SECRET;
   if (!configuredSecret) {
@@ -42,6 +53,13 @@ export async function GET(request: NextRequest) {
   const results = [];
   for (const run of activeRuns) {
     const runStart = Date.now();
+    if (runStart - tickStart > TICK_BUDGET_MS) {
+      console.log(
+        `[cron/tick] stopping early, ${TICK_BUDGET_MS}ms budget spent -- deferring ${run.id} (and any after it) to the next tick`,
+      );
+      results.push({ runId: run.id, action: "deferred" as const, detail: "tick budget exhausted" });
+      continue;
+    }
     console.log(`[cron/tick] advancing ${run.id} (+${runStart - tickStart}ms since tick start)`);
     try {
       const result = await advanceRun(run.id);

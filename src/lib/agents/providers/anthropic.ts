@@ -8,20 +8,20 @@ import {
   type ToolCallLogEntry,
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
+import { withTimeout } from "../withTimeout";
 
 const RESEARCH_MAX_TOKENS = 2000;
 const TURN_MAX_TOKENS = 2000;
 
-// Both SDK clients used in this file default to a 10-MINUTE request
-// timeout with automatic retries on timeout -- diagnosed directly from a
-// production cron tick that hung inside a provider call and blew the
-// route's entire 60s budget without ever throwing, so the turn's own
-// try/catch never got a chance to fall back gracefully. These bound the
-// worst case: one retry, each attempt capped well under the route's
-// maxDuration, so a hang now fails fast instead of silently consuming
-// the whole invocation.
-const RESEARCH_TIMEOUT_MS = 20_000;
-const TURN_TIMEOUT_MS = 25_000;
+// The SDK's own `timeout` request option is passed below too, but a real
+// production hang proved it isn't reliably enforced in this environment
+// -- the call ran the cron route's full 60s to a hard kill despite a
+// 20s timeout being set. withTimeout() is the actual guarantee: a plain
+// Promise.race the calling code can't get stuck behind regardless of
+// what the SDK does internally. Kept tight since up to two active runs
+// can share one 60s invocation (see cron/tick/route.ts).
+const RESEARCH_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_MS = 20_000;
 
 export const anthropicAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
@@ -34,33 +34,37 @@ export const anthropicAdapter: ProviderAdapter = {
 
     if (input.enableResearch) {
       try {
-        const researchResponse = await client.messages.create(
-          {
-            model: input.modelId,
-            max_tokens: RESEARCH_MAX_TOKENS,
-            system: input.systemPrompt,
-            // Capped to one direct search per research turn -- per the
-            // September 2026 model-selection research, every extra internal
-            // search/code-execution iteration is tail latency this app can't
-            // afford under the 60s serverless timeout. `allowed_callers:
-            // ["direct"]` opts out of the newer dynamic-filtering-via-code-
-            // execution default for the same reason.
-            tools: [
-              {
-                type: "web_search_20260318",
-                name: "web_search",
-                max_uses: 1,
-                allowed_callers: ["direct"],
-              },
-            ],
-            messages: [
-              {
-                role: "user",
-                content: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-              },
-            ],
-          },
-          { timeout: RESEARCH_TIMEOUT_MS },
+        const researchResponse = await withTimeout(
+          client.messages.create(
+            {
+              model: input.modelId,
+              max_tokens: RESEARCH_MAX_TOKENS,
+              system: input.systemPrompt,
+              // Capped to one direct search per research turn -- per the
+              // September 2026 model-selection research, every extra internal
+              // search/code-execution iteration is tail latency this app can't
+              // afford under the 60s serverless timeout. `allowed_callers:
+              // ["direct"]` opts out of the newer dynamic-filtering-via-code-
+              // execution default for the same reason.
+              tools: [
+                {
+                  type: "web_search_20260318",
+                  name: "web_search",
+                  max_uses: 1,
+                  allowed_callers: ["direct"],
+                },
+              ],
+              messages: [
+                {
+                  role: "user",
+                  content: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+                },
+              ],
+            },
+            { timeout: RESEARCH_TIMEOUT_MS },
+          ),
+          RESEARCH_TIMEOUT_MS,
+          "Anthropic research call",
         );
 
         inputTokens += researchResponse.usage.input_tokens;
@@ -116,33 +120,41 @@ export const anthropicAdapter: ProviderAdapter = {
     });
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
-    const turnResponse = await client.messages.parse(
-      {
-        model: input.modelId,
-        max_tokens: TURN_MAX_TOKENS,
-        system: input.systemPrompt,
-        output_config: { format: zodOutputFormat(turnOutputSchema) },
-        messages: [
-          {
-            role: "user",
-            content:
-              imageDocs.length === 0
-                ? turnText
-                : [
-                    { type: "text", text: turnText },
-                    ...imageDocs.map((d) => ({
-                      type: "image" as const,
-                      source: {
-                        type: "base64" as const,
-                        media_type: d.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-                        data: d.content,
-                      },
-                    })),
-                  ],
-          },
-        ],
-      },
-      { timeout: TURN_TIMEOUT_MS },
+    const turnResponse = await withTimeout(
+      client.messages.parse(
+        {
+          model: input.modelId,
+          max_tokens: TURN_MAX_TOKENS,
+          system: input.systemPrompt,
+          output_config: { format: zodOutputFormat(turnOutputSchema) },
+          messages: [
+            {
+              role: "user",
+              content:
+                imageDocs.length === 0
+                  ? turnText
+                  : [
+                      { type: "text", text: turnText },
+                      ...imageDocs.map((d) => ({
+                        type: "image" as const,
+                        source: {
+                          type: "base64" as const,
+                          media_type: d.mimeType as
+                            | "image/jpeg"
+                            | "image/png"
+                            | "image/gif"
+                            | "image/webp",
+                          data: d.content,
+                        },
+                      })),
+                    ],
+            },
+          ],
+        },
+        { timeout: TURN_TIMEOUT_MS },
+      ),
+      TURN_TIMEOUT_MS,
+      "Anthropic turn call",
     );
 
     inputTokens += turnResponse.usage.input_tokens;

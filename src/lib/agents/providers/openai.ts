@@ -8,6 +8,7 @@ import {
   type ToolCallLogEntry,
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
+import { withTimeout } from "../withTimeout";
 
 const RESEARCH_MAX_TOKENS = 2000;
 const TURN_MAX_TOKENS = 2000;
@@ -16,11 +17,14 @@ const TURN_MAX_TOKENS = 2000;
 // 10-MINUTE request timeout with automatic retries on timeout, so a slow
 // or hung web-search call just sits there far past the cron route's 60s
 // maxDuration -- the function gets hard-killed before this call's own
-// try/catch ever gets a chance to fall back gracefully. These bound the
-// worst case to one retry, each attempt capped well under the route's
-// budget.
-const RESEARCH_TIMEOUT_MS = 20_000;
-const TURN_TIMEOUT_MS = 25_000;
+// try/catch ever gets a chance to fall back gracefully. The SDK-level
+// `timeout` option below is kept, but a follow-up production hang proved
+// it isn't reliably enforced on its own -- withTimeout() wraps each call
+// in a plain Promise.race so the calling code can't get stuck behind it
+// regardless. Kept tight since up to two active runs can share one 60s
+// invocation (see cron/tick/route.ts).
+const RESEARCH_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_MS = 20_000;
 
 // Uses the current `web_search` tool (not the legacy `web_search_preview`
 // this adapter originally shipped with) -- confirmed against OpenAI's own
@@ -45,19 +49,23 @@ export const openaiAdapter: ProviderAdapter = {
 
     if (input.enableResearch) {
       try {
-        const researchResponse = await client.responses.create(
-          {
-            model: input.modelId,
-            instructions: input.systemPrompt,
-            // No max-calls-per-turn equivalent to Anthropic's max_uses is
-            // exposed on this tool type -- search_context_size: "low"
-            // trims how much each individual search processes, but the
-            // request timeout below is the real backstop against an
-            // open-ended multi-search loop.
-            tools: [{ type: "web_search", search_context_size: "low" }],
-            input: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-          },
-          { timeout: RESEARCH_TIMEOUT_MS },
+        const researchResponse = await withTimeout(
+          client.responses.create(
+            {
+              model: input.modelId,
+              instructions: input.systemPrompt,
+              // No max-calls-per-turn equivalent to Anthropic's max_uses is
+              // exposed on this tool type -- search_context_size: "low"
+              // trims how much each individual search processes, but the
+              // request timeout below is the real backstop against an
+              // open-ended multi-search loop.
+              tools: [{ type: "web_search", search_context_size: "low" }],
+              input: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+            },
+            { timeout: RESEARCH_TIMEOUT_MS },
+          ),
+          RESEARCH_TIMEOUT_MS,
+          "OpenAI research call",
         );
 
         inputTokens += researchResponse.usage?.input_tokens ?? 0;
@@ -107,29 +115,33 @@ export const openaiAdapter: ProviderAdapter = {
     });
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
-    const turnResponse = await client.responses.parse(
-      {
-        model: input.modelId,
-        instructions: input.systemPrompt,
-        text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
-        input:
-          imageDocs.length === 0
-            ? turnText
-            : [
-                {
-                  role: "user" as const,
-                  content: [
-                    { type: "input_text" as const, text: turnText },
-                    ...imageDocs.map((d) => ({
-                      type: "input_image" as const,
-                      image_url: `data:${d.mimeType};base64,${d.content}`,
-                      detail: "auto" as const,
-                    })),
-                  ],
-                },
-              ],
-      },
-      { timeout: TURN_TIMEOUT_MS },
+    const turnResponse = await withTimeout(
+      client.responses.parse(
+        {
+          model: input.modelId,
+          instructions: input.systemPrompt,
+          text: { format: zodTextFormat(turnOutputSchema, "turn_output") },
+          input:
+            imageDocs.length === 0
+              ? turnText
+              : [
+                  {
+                    role: "user" as const,
+                    content: [
+                      { type: "input_text" as const, text: turnText },
+                      ...imageDocs.map((d) => ({
+                        type: "input_image" as const,
+                        image_url: `data:${d.mimeType};base64,${d.content}`,
+                        detail: "auto" as const,
+                      })),
+                    ],
+                  },
+                ],
+        },
+        { timeout: TURN_TIMEOUT_MS },
+      ),
+      TURN_TIMEOUT_MS,
+      "OpenAI turn call",
     );
 
     inputTokens += turnResponse.usage?.input_tokens ?? 0;

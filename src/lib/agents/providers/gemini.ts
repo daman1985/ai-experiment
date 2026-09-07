@@ -7,6 +7,7 @@ import type {
   TurnOutput,
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
+import { withTimeout } from "../withTimeout";
 
 // Hand-written to match turnOutputSchema in ../schema.ts (kept in sync
 // manually -- Gemini's structured-output schema is the OpenAPI-subset
@@ -69,9 +70,14 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
 // the cron route's 60s maxDuration -- the function gets hard-killed
 // before the call's own try/catch ever runs. This SDK's default is
 // unconfirmed but the same risk applies, so it gets the same explicit
-// bound rather than trusting whatever the default turns out to be.
-const RESEARCH_TIMEOUT_MS = 20_000;
-const TURN_TIMEOUT_MS = 25_000;
+// bound rather than trusting whatever the default turns out to be. A
+// follow-up hang proved the SDK-level `timeout` option alone isn't
+// reliably enforced in this environment either -- withTimeout() wraps
+// each call in a plain Promise.race so the calling code can't get stuck
+// behind it regardless. Kept tight since up to two active runs can share
+// one 60s invocation (see cron/tick/route.ts).
+const RESEARCH_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_MS = 20_000;
 
 export const geminiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
@@ -84,15 +90,19 @@ export const geminiAdapter: ProviderAdapter = {
 
     if (input.enableResearch) {
       try {
-        const researchResponse = await ai.models.generateContent({
-          model: input.modelId,
-          contents: buildResearchPrompt(input.transcript, input.selfRoomLabel),
-          config: {
-            systemInstruction: input.systemPrompt,
-            tools: [{ googleSearch: {} }],
-            httpOptions: { timeout: RESEARCH_TIMEOUT_MS },
-          },
-        });
+        const researchResponse = await withTimeout(
+          ai.models.generateContent({
+            model: input.modelId,
+            contents: buildResearchPrompt(input.transcript, input.selfRoomLabel),
+            config: {
+              systemInstruction: input.systemPrompt,
+              tools: [{ googleSearch: {} }],
+              httpOptions: { timeout: RESEARCH_TIMEOUT_MS },
+            },
+          }),
+          RESEARCH_TIMEOUT_MS,
+          "Gemini research call",
+        );
 
         inputTokens += researchResponse.usageMetadata?.promptTokenCount ?? 0;
         outputTokens += researchResponse.usageMetadata?.candidatesTokenCount ?? 0;
@@ -126,29 +136,33 @@ export const geminiAdapter: ProviderAdapter = {
     });
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
-    const turnResponse = await ai.models.generateContent({
-      model: input.modelId,
-      contents:
-        imageDocs.length === 0
-          ? turnText
-          : [
-              {
-                role: "user",
-                parts: [
-                  { text: turnText },
-                  ...imageDocs.map((d) => ({
-                    inlineData: { mimeType: d.mimeType, data: d.content },
-                  })),
-                ],
-              },
-            ],
-      config: {
-        systemInstruction: input.systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
-        httpOptions: { timeout: TURN_TIMEOUT_MS },
-      },
-    });
+    const turnResponse = await withTimeout(
+      ai.models.generateContent({
+        model: input.modelId,
+        contents:
+          imageDocs.length === 0
+            ? turnText
+            : [
+                {
+                  role: "user",
+                  parts: [
+                    { text: turnText },
+                    ...imageDocs.map((d) => ({
+                      inlineData: { mimeType: d.mimeType, data: d.content },
+                    })),
+                  ],
+                },
+              ],
+        config: {
+          systemInstruction: input.systemPrompt,
+          responseMimeType: "application/json",
+          responseSchema: TURN_OUTPUT_GEMINI_SCHEMA,
+          httpOptions: { timeout: TURN_TIMEOUT_MS },
+        },
+      }),
+      TURN_TIMEOUT_MS,
+      "Gemini turn call",
+    );
 
     inputTokens += turnResponse.usageMetadata?.promptTokenCount ?? 0;
     outputTokens += turnResponse.usageMetadata?.candidatesTokenCount ?? 0;
