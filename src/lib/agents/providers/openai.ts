@@ -27,8 +27,13 @@ const TURN_MAX_TOKENS = 2000;
 // ~35s and genuinely original turn reasoning ~24s -- not hangs, just cut
 // off too early. Raised with margin to match; kept in sync with
 // anthropic.ts's timeouts and engine.ts's MIN_TURN_BUDGET_MS.
+//
+// TURN_TIMEOUT_MS raised a second time to 60s in lockstep with
+// anthropic.ts -- see that file's comment: real Watch Live turns kept
+// hitting the 35s ceiling once TURN_MAX_TOKENS there doubled, since
+// generation time tracks output length, not input size.
 const RESEARCH_TIMEOUT_MS = 40_000;
-const TURN_TIMEOUT_MS = 35_000;
+const TURN_TIMEOUT_MS = 60_000;
 
 // Uses the current `web_search` tool (not the legacy `web_search_preview`
 // this adapter originally shipped with) -- confirmed against OpenAI's own

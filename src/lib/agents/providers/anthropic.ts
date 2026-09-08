@@ -36,8 +36,17 @@ const TURN_MAX_TOKENS = 4000;
 // cut off mid-flight, not stuck. Raised with real margin above both
 // observed times; the cron route's own maxDuration and the shared-
 // deadline math in engine.ts are raised to match (see MIN_TURN_BUDGET_MS).
+//
+// TURN_TIMEOUT_MS raised a second time, from 35s to 60s: that ~24s figure
+// was only ever measured against TURN_MAX_TOKENS=2000 (see below). Once
+// that was doubled to 4000 to stop mid-JSON truncation, two real Watch
+// Live turns with modest transcript sizes (well under the ones that
+// prompted the first fix) still hit the full 35s ceiling in production --
+// generation time tracks output length, and the model is now allowed to
+// write up to 2x as much of it, so the old ceiling no longer has real
+// margin above the new worst case. Raised well past a naive 2x of 24s.
 const RESEARCH_TIMEOUT_MS = 40_000;
-const TURN_TIMEOUT_MS = 35_000;
+const TURN_TIMEOUT_MS = 60_000;
 
 export const anthropicAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {

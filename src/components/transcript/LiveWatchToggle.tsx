@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { advanceRunNowAction } from "@/app/runs/[id]/actions";
+import { Badge } from "@/components/ui/Badge";
 
 // Gap between one advance call finishing and the next one starting --
 // paces off the actual turn latency (a self-scheduling loop) rather than
@@ -23,10 +24,14 @@ const HIDDEN_RECHECK_MS = 2000;
 // schedule already provides, which never stopped running underneath it.
 export function LiveWatchToggle({ runId }: { runId: string }) {
   const [watching, setWatching] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    if (!watching) return;
+    if (!watching) {
+      setLastError(null);
+      return;
+    }
     let cancelled = false;
 
     async function loop() {
@@ -40,9 +45,16 @@ export function LiveWatchToggle({ runId }: { runId: string }) {
         }
         try {
           await advanceRunNowAction(runId);
-        } catch {
-          // A transient provider/network error shouldn't silently kill
-          // live mode -- just keep pacing and let the next call retry.
+          if (!cancelled) setLastError(null);
+        } catch (err) {
+          // Previously swallowed entirely with no UI feedback -- a
+          // transient provider/network error shouldn't kill live mode, so
+          // this still just keeps pacing and lets the next call retry,
+          // but the admin needs to be able to tell "still working" apart
+          // from "checked the box and nothing is happening."
+          if (!cancelled) {
+            setLastError(err instanceof Error ? err.message : "Advance attempt failed.");
+          }
         }
         if (cancelled) return;
         router.refresh();
@@ -57,18 +69,33 @@ export function LiveWatchToggle({ runId }: { runId: string }) {
   }, [watching, runId, router]);
 
   return (
-    <label className="flex items-center gap-2 text-xs text-text-secondary">
-      <input
-        type="checkbox"
-        checked={watching}
-        onChange={(e) => setWatching(e.target.checked)}
-        className="accent-accent"
-      />
-      Watch live
-      <span className="text-text-tertiary">
-        (advances every couple seconds while this tab is open and visible -- real spend, same as
-        any turn; pauses automatically if you switch away)
-      </span>
-    </label>
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center gap-2 text-xs text-text-secondary">
+        <input
+          type="checkbox"
+          checked={watching}
+          onChange={(e) => setWatching(e.target.checked)}
+          className="accent-accent"
+        />
+        Watch live
+        <span className="text-text-tertiary">
+          (advances every couple seconds while this tab is open and visible -- real spend, same as
+          any turn; pauses automatically if you switch away)
+        </span>
+      </label>
+      {watching && lastError && (
+        // role="status" (polite), not "alert" -- this can re-render every
+        // poll while a failure persists, and an assertive region would
+        // interrupt screen reader users on that cadence. See
+        // docs/design-system.md's live-region guidance. Badge matches the
+        // app's one other error precedent (the login page) instead of
+        // color-only text.
+        <div role="status" className="pl-6">
+          <Badge variant="error">
+            Last advance attempt failed: {lastError} (still retrying every {POLL_DELAY_MS / 1000}s)
+          </Badge>
+        </div>
+      )}
+    </div>
   );
 }

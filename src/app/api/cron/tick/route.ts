@@ -11,10 +11,14 @@ import { logDiagnostic } from "@/lib/diagnostics";
 // live web search, so this is given real headroom rather than the
 // platform's 10s default. Confirmed directly against production with the
 // app's actual prompts (not placeholder content) that a real research
-// call can legitimately take ~35s and genuinely original turn reasoning
-// ~24s, not counting a possible consensus-extraction chain immediately
-// afterward (another ~50s worst case) -- 60s was never actually enough
-// for a single real turn, let alone more than one. See
+// call can legitimately take ~35s -- 60s was never actually enough for a
+// single real turn, let alone more than one. The turn call itself now has
+// up to 60s of its own (raised from ~24s worst-observed once
+// TURN_MAX_TOKENS doubled to stop mid-JSON truncation -- see
+// providers/anthropic.ts), not counting a possible consensus-extraction
+// chain immediately afterward (another ~50s worst case). Still comfortably
+// above one full research+turn (~100s) with margin to spare, so this
+// doesn't need to move with that bump -- see
 // MIN_TURN_BUDGET_MS/MIN_EXTRACTION_BUDGET_MS in engine.ts, which this
 // deadline math is kept in sync with.
 export const maxDuration = 150;

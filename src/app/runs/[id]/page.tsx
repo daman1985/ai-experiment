@@ -24,10 +24,14 @@ export const dynamic = "force-dynamic";
 // "Watch live" (LiveWatchToggle) calls advanceRunNowAction directly, a
 // server action on this page -- without this export it ran under
 // whatever the platform's default function duration is, nowhere close to
-// enough for a real research+turn call (confirmed up to ~75s combined).
-// Matches advanceRun()'s own default deadline (90s) with a little more
-// room for surrounding overhead.
-export const maxDuration = 100;
+// enough for a real research+turn call. Raised from 100s to 180s
+// alongside TURN_TIMEOUT_MS's 35s -> 60s bump in the provider adapters
+// (research 40s + turn 60s = ~100s worst case alone, before a possible
+// consensus-extraction chain immediately after -- see providers/
+// anthropic.ts and MIN_TURN_BUDGET_MS/MIN_EXTRACTION_BUDGET_MS in
+// engine.ts). Matches advanceRun()'s own default deadline (170s) with a
+// little more room for surrounding overhead.
+export const maxDuration = 180;
 
 export default async function RunViewerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
