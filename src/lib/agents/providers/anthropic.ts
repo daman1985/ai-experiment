@@ -12,7 +12,14 @@ import { withTimeout } from "../withTimeout";
 import { logDiagnostic } from "@/lib/diagnostics";
 
 const RESEARCH_MAX_TOKENS = 2000;
-const TURN_MAX_TOKENS = 2000;
+// Confirmed directly from a real production turn (after the timeout fix
+// deployed): the model's response hit stop_reason max_tokens before the
+// SDK could parse a complete turnOutputSchema JSON object out of it --
+// 2000 was validated only against trivial, prescribed test content
+// ("any message, any weaknessCritique"), never a genuinely original
+// turn (a real invented proposal plus a real critique of it, which reads
+// as substantially more text once written out in full).
+const TURN_MAX_TOKENS = 4000;
 
 // The SDK's own `timeout` request option is passed below too; withTimeout()
 // is the actual guarantee -- a plain Promise.race the calling code can't
@@ -193,19 +200,41 @@ export const anthropicAdapter: ProviderAdapter = {
       });
       throw err;
     }
+    inputTokens += turnResponse.usage.input_tokens;
+    outputTokens += turnResponse.usage.output_tokens;
+
+    if (!turnResponse.parsed_output) {
+      // The API call itself succeeded (this is reached only after the
+      // try/catch above), but the SDK couldn't coerce the response into
+      // turnOutputSchema -- previously thrown with zero detail about why,
+      // which is exactly the visibility gap that made the first real
+      // occurrence of this (in production, after the timeout fix) opaque.
+      // stop_reason distinguishes "cut off before finishing the JSON"
+      // (max_tokens -- the real fix is raising TURN_MAX_TOKENS) from a
+      // genuine refusal or malformed output (something else entirely).
+      const textPreview = turnResponse.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .slice(0, 500);
+      await logDiagnostic({
+        source: "anthropic:turn",
+        level: "error",
+        runId: input.runId,
+        message: `succeeded in ${Date.now() - turnStart}ms but failed to parse into the required schema (stop_reason: ${turnResponse.stop_reason})`,
+        detail: { stopReason: turnResponse.stop_reason, outputTokens: turnResponse.usage.output_tokens, textPreview },
+      });
+      throw new Error(
+        `Anthropic response failed to parse into the required turn schema (stop_reason: ${turnResponse.stop_reason}).`,
+      );
+    }
+
     await logDiagnostic({
       source: "anthropic:turn",
       level: "info",
       runId: input.runId,
       message: `succeeded in ${Date.now() - turnStart}ms`,
     });
-
-    inputTokens += turnResponse.usage.input_tokens;
-    outputTokens += turnResponse.usage.output_tokens;
-
-    if (!turnResponse.parsed_output) {
-      throw new Error("Anthropic response failed to parse into the required turn schema.");
-    }
 
     return {
       output: turnResponse.parsed_output,
