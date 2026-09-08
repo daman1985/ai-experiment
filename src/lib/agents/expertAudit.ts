@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { withTimeout } from "./withTimeout";
+import { callStructuredOutput } from "./structuredOutput";
 
 // This is a deliberately heavier, deliberately separate analysis than the
 // per-decision root-cause pass in decisionExtraction.ts: it's admin-
@@ -121,34 +121,31 @@ If that assumption is wrong: ${decision.likelyFailureMode}`;
 export async function runExpertAudit(
   apiKey: string,
   modelId: string,
+  runId: string,
   turns: AuditTranscriptTurn[],
   decision: AuditDecisionInfo,
 ): Promise<{ result: ExpertAuditResult; inputTokens: number; outputTokens: number }> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
   const prompt = `Transcript leading to this decision:\n\n${formatAuditTranscript(turns)}\n\n---\n\n${formatAuditDecision(decision)}\n\n---\n\nAudit this decision.`;
 
-  const response = await withTimeout(
-    (signal) =>
-      client.messages.parse(
-        {
-          model: modelId,
-          max_tokens: 4000,
-          system: EXPERT_AUDIT_SYSTEM_PROMPT,
-          output_config: { format: zodOutputFormat(expertAuditSchema) },
-          messages: [{ role: "user", content: prompt }],
-        },
-        { timeout: AUDIT_TIMEOUT_MS, signal },
-      ),
-    AUDIT_TIMEOUT_MS,
-    "Expert audit call",
-  );
-
-  if (!response.parsed_output) {
-    throw new Error("Expert audit call failed to parse into the required schema.");
-  }
-  return {
-    result: response.parsed_output,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
-  };
+  // See structuredOutput.ts's callStructuredOutput for why this goes
+  // through client.messages.create() plus manual parsing rather than
+  // .parse() (which throws away stop_reason/usage/raw text on any
+  // parse/validation failure).
+  const { data, inputTokens, outputTokens } = await callStructuredOutput({
+    client,
+    params: {
+      model: modelId,
+      max_tokens: 4000,
+      system: EXPERT_AUDIT_SYSTEM_PROMPT,
+      output_config: { format: zodOutputFormat(expertAuditSchema) },
+      messages: [{ role: "user", content: prompt }],
+    },
+    schema: expertAuditSchema,
+    timeoutMs: AUDIT_TIMEOUT_MS,
+    label: "Expert audit call",
+    source: "expertAudit",
+    runId,
+  });
+  return { result: data, inputTokens, outputTokens };
 }

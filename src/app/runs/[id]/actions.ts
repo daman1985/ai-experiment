@@ -221,6 +221,7 @@ export async function runExpertAuditAction(formData: FormData): Promise<void> {
   const { result, inputTokens, outputTokens } = await runExpertAudit(
     apiKey,
     anthropicConfig.defaultModelId,
+    decision.runId,
     auditTurns,
     {
       outcome: decision.outcome,

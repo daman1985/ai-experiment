@@ -474,7 +474,7 @@ async function checkConsensus(
   const transcript = await fullTranscript(run.id);
 
   let t0 = Date.now();
-  const extraction = await extractConsensusOutcome(anthropicKey, transcript);
+  const extraction = await extractConsensusOutcome(anthropicKey, run.id, transcript);
   await logDiagnostic({
     source: "checkConsensus",
     level: "info",
@@ -483,7 +483,7 @@ async function checkConsensus(
   });
   await recordSystemCost(run.id, extraction, anthropicConfig);
   t0 = Date.now();
-  const rootCause = await extractRootCauseCheck(anthropicKey, transcript, extraction.result.outcome);
+  const rootCause = await extractRootCauseCheck(anthropicKey, run.id, transcript, extraction.result.outcome);
   await logDiagnostic({
     source: "checkConsensus",
     level: "info",
@@ -575,7 +575,7 @@ async function handleForcedVoteTurn(
   const anthropicKey = decrypt(toEncryptedPayload(anthropicConfig));
   const votes = Array.from(latestVoteByAgent.values());
   let t0 = Date.now();
-  const tally = await extractVoteTally(anthropicKey, votes);
+  const tally = await extractVoteTally(anthropicKey, run.id, votes);
   await logDiagnostic({
     source: "handleForcedVoteTurn",
     level: "info",
@@ -586,7 +586,7 @@ async function handleForcedVoteTurn(
 
   const transcript = await fullTranscript(run.id);
   t0 = Date.now();
-  const rootCause = await extractRootCauseCheck(anthropicKey, transcript, tally.result.outcome);
+  const rootCause = await extractRootCauseCheck(anthropicKey, run.id, transcript, tally.result.outcome);
   await logDiagnostic({
     source: "handleForcedVoteTurn",
     level: "info",

@@ -9,6 +9,7 @@ import {
 } from "../schema";
 import { buildResearchPrompt, buildTurnPrompt } from "../prompt";
 import { withTimeout } from "../withTimeout";
+import { callStructuredOutput } from "../structuredOutput";
 import { logDiagnostic } from "@/lib/diagnostics";
 
 const RESEARCH_MAX_TOKENS = 2000;
@@ -160,83 +161,62 @@ export const anthropicAdapter: ProviderAdapter = {
     const imageDocs = input.documents.filter((d) => d.kind === "IMAGE");
 
     const turnStart = Date.now();
-    let turnResponse;
-    try {
-      turnResponse = await withTimeout(
-        (signal) =>
-          client.messages.parse(
+    // client.messages.create() under the hood, not .parse() -- .parse()
+    // calls zodOutputFormat's own `.parse(content)` internally (see
+    // node_modules/@anthropic-ai/sdk/helpers/zod.js), which THROWS on any
+    // failure (malformed JSON or a schema mismatch) instead of ever
+    // returning a message. That discards the one response object
+    // (stop_reason, usage, raw text) that would explain WHY, before our
+    // code ever sees it -- confirmed directly against production: a real
+    // "Unterminated string in JSON" failure (a classic mid-generation
+    // max_tokens cutoff) surfaced with zero stop_reason/text visibility.
+    // output_config is still accepted by .create() (per that same
+    // helper's own doc comment) to steer the model's output shape --
+    // callStructuredOutput just parses the raw text itself, so a parse
+    // failure keeps the full response for real diagnostics. See
+    // structuredOutput.ts.
+    const { data: output, inputTokens: turnInputTokens, outputTokens: turnOutputTokens } = await callStructuredOutput(
+      {
+        client,
+        params: {
+          model: input.modelId,
+          max_tokens: TURN_MAX_TOKENS,
+          system: input.systemPrompt,
+          output_config: { format: zodOutputFormat(turnOutputSchema) },
+          messages: [
             {
-              model: input.modelId,
-              max_tokens: TURN_MAX_TOKENS,
-              system: input.systemPrompt,
-              output_config: { format: zodOutputFormat(turnOutputSchema) },
-              messages: [
-                {
-                  role: "user",
-                  content:
-                    imageDocs.length === 0
-                      ? turnText
-                      : [
-                          { type: "text", text: turnText },
-                          ...imageDocs.map((d) => ({
-                            type: "image" as const,
-                            source: {
-                              type: "base64" as const,
-                              media_type: d.mimeType as
-                                | "image/jpeg"
-                                | "image/png"
-                                | "image/gif"
-                                | "image/webp",
-                              data: d.content,
-                            },
-                          })),
-                        ],
-                },
-              ],
+              role: "user",
+              content:
+                imageDocs.length === 0
+                  ? turnText
+                  : [
+                      { type: "text", text: turnText },
+                      ...imageDocs.map((d) => ({
+                        type: "image" as const,
+                        source: {
+                          type: "base64" as const,
+                          media_type: d.mimeType as
+                            | "image/jpeg"
+                            | "image/png"
+                            | "image/gif"
+                            | "image/webp",
+                          data: d.content,
+                        },
+                      })),
+                    ],
             },
-            { timeout: TURN_TIMEOUT_MS, signal },
-          ),
-        TURN_TIMEOUT_MS,
-        "Anthropic turn call",
-      );
-    } catch (err) {
-      await logDiagnostic({
+          ],
+        },
+        schema: turnOutputSchema,
+        timeoutMs: TURN_TIMEOUT_MS,
+        label: "Anthropic turn call",
         source: "anthropic:turn",
-        level: "error",
         runId: input.runId,
-        message: `failed after ${Date.now() - turnStart}ms: ${err instanceof Error ? err.message : String(err)}`,
-        detail: { systemPromptLength: input.systemPrompt.length, turnTextLength: turnText.length },
-      });
-      throw err;
-    }
-    inputTokens += turnResponse.usage.input_tokens;
-    outputTokens += turnResponse.usage.output_tokens;
-
-    if (!turnResponse.parsed_output) {
-      // The API call itself succeeded (this is reached only after the
-      // try/catch above), but the SDK couldn't coerce the response into
-      // turnOutputSchema -- previously thrown with zero detail about why,
-      // which is exactly the visibility gap that made the first real
-      // occurrence of this (in production, after the timeout fix) opaque.
-      // stop_reason distinguishes "cut off before finishing the JSON"
-      // (max_tokens -- the real fix is raising TURN_MAX_TOKENS) from a
-      // genuine refusal or malformed output (something else entirely).
-      const textPreview = turnResponse.content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-        .slice(0, 500);
-      await logDiagnostic({
-        source: "anthropic:turn",
-        level: "error",
-        runId: input.runId,
-        message: `succeeded in ${Date.now() - turnStart}ms but failed to parse into the required schema (stop_reason: ${turnResponse.stop_reason})`,
-        detail: { stopReason: turnResponse.stop_reason, outputTokens: turnResponse.usage.output_tokens, textPreview },
-      });
-      throw new Error(
-        `Anthropic response failed to parse into the required turn schema (stop_reason: ${turnResponse.stop_reason}).`,
-      );
-    }
+        extraFailureDetail: { systemPromptLength: input.systemPrompt.length, turnTextLength: turnText.length },
+      },
+    );
+    inputTokens += turnInputTokens;
+    outputTokens += turnOutputTokens;
 
     await logDiagnostic({
       source: "anthropic:turn",
@@ -246,7 +226,7 @@ export const anthropicAdapter: ProviderAdapter = {
     });
 
     return {
-      output: turnResponse.parsed_output,
+      output,
       inputTokens,
       outputTokens,
       toolCalls,

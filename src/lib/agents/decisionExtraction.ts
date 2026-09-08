@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { formatTranscript } from "./prompt";
 import type { TranscriptEntryForPrompt } from "./schema";
-import { withTimeout } from "./withTimeout";
+import { callStructuredOutput } from "./structuredOutput";
 
 // This is a mechanical extraction step, not a decision-making one: it reads
 // turns the three agents already produced and reports what they said,
@@ -51,44 +51,49 @@ const rootCauseCheckSchema = z.object({
     .describe("If that assumption turns out to be wrong, the most likely concrete way this decision fails in practice."),
 });
 
+// See structuredOutput.ts's callStructuredOutput for why this goes
+// through client.messages.create() plus manual parsing rather than
+// .parse() (which throws away stop_reason/usage/raw text on any
+// parse/validation failure). This call sits directly on the
+// consensus/vote-resolution path with no caller-side try/catch at all
+// (see checkConsensus/handleForcedVoteTurn in engine.ts), so a failure
+// here used to propagate as a bare, undiagnosable AnthropicError.
 async function callExtraction<T>(
   apiKey: string,
+  runId: string,
+  source: string,
   system: string,
   prompt: string,
   schema: z.ZodType<T>,
 ): Promise<{ result: T; inputTokens: number; outputTokens: number }> {
   const client = new Anthropic({ apiKey, maxRetries: 1 });
-  const response = await withTimeout(
-    (signal) =>
-      client.messages.parse(
-        {
-          model: EXTRACTION_MODEL_ID,
-          max_tokens: 1000,
-          system,
-          output_config: { format: zodOutputFormat(schema) },
-          messages: [{ role: "user", content: prompt }],
-        },
-        { timeout: EXTRACTION_TIMEOUT_MS, signal },
-      ),
-    EXTRACTION_TIMEOUT_MS,
-    "Decision extraction call",
-  );
-  if (!response.parsed_output) {
-    throw new Error("Decision extraction call failed to parse.");
-  }
-  return {
-    result: response.parsed_output,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
-  };
+  const { data, inputTokens, outputTokens } = await callStructuredOutput({
+    client,
+    params: {
+      model: EXTRACTION_MODEL_ID,
+      max_tokens: 1000,
+      system,
+      output_config: { format: zodOutputFormat(schema) },
+      messages: [{ role: "user", content: prompt }],
+    },
+    schema,
+    timeoutMs: EXTRACTION_TIMEOUT_MS,
+    label: "Decision extraction call",
+    source,
+    runId,
+  });
+  return { result: data, inputTokens, outputTokens };
 }
 
 export async function extractConsensusOutcome(
   apiKey: string,
+  runId: string,
   transcript: TranscriptEntryForPrompt[],
 ) {
   return callExtraction(
     apiKey,
+    runId,
+    "decisionExtraction:consensus",
     "You extract what a group of AI agents agreed on from their conversation. Report only what was actually said -- never add, infer, or improve on their decision.",
     `Conversation:\n\n${formatTranscript(transcript)}\n\n---\n\nAll participants signaled they're ready to decide. State what they agreed on.`,
     consensusExtractionSchema,
@@ -97,11 +102,14 @@ export async function extractConsensusOutcome(
 
 export async function extractVoteTally(
   apiKey: string,
+  runId: string,
   votes: { agentDisplayName: string; voteChoice: string }[],
 ) {
   const voteText = votes.map((v) => `${v.agentDisplayName}: ${v.voteChoice}`).join("\n");
   return callExtraction(
     apiKey,
+    runId,
+    "decisionExtraction:voteTally",
     "You tally votes cast by a group of AI agents. Determine the majority (or plurality) position and identify any dissent. Do not judge which position is better -- only report the count.",
     `Votes cast:\n\n${voteText}\n\n---\n\nWhich position won, and who (if anyone) dissented?`,
     voteTallyExtractionSchema,
@@ -116,11 +124,14 @@ export async function extractVoteTally(
 // only names what the group didn't actually examine.
 export async function extractRootCauseCheck(
   apiKey: string,
+  runId: string,
   transcript: TranscriptEntryForPrompt[],
   outcome: string,
 ) {
   return callExtraction(
     apiKey,
+    runId,
+    "decisionExtraction:rootCause",
     "You are a skeptical outside reviewer reading a decision a group of AI agents just reached. You do not participate in or relitigate the decision -- you identify what the group didn't actually examine, based only on what they said.",
     `Conversation:\n\n${formatTranscript(transcript)}\n\n---\n\nThe group decided: ${outcome}\n\nWhat is the single most significant assumption this decision rests on that nobody actually tested or verified in the conversation above? If that assumption is wrong, what's the most likely concrete way this decision fails in practice?`,
     rootCauseCheckSchema,
