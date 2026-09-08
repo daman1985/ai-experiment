@@ -20,7 +20,18 @@ const RESEARCH_MAX_TOKENS = 2000;
 // ("any message, any weaknessCritique"), never a genuinely original
 // turn (a real invented proposal plus a real critique of it, which reads
 // as substantially more text once written out in full).
-const TURN_MAX_TOKENS = 4000;
+//
+// Raised a second time, 4000 -> 8000: once the structured-output parsing
+// fix (see structuredOutput.ts) stopped .parse() from discarding
+// stop_reason on failure, the *next* real occurrence showed stop_reason:
+// 'max_tokens', outputTokens: 4000 (exactly the ceiling), with the
+// response cut off 6328 characters into the JSON -- still mid-way through
+// just the "message" field on turn #13 of a long-running, substantive
+// debate, nowhere near weaknessCritique/confidence/artifact yet. Real
+// evidence this time, not a guess: the model is legitimately producing
+// more than double the content 4000 tokens allows for a genuinely
+// developed turn late in a deliberation.
+const TURN_MAX_TOKENS = 8000;
 
 // The SDK's own `timeout` request option is passed below too; withTimeout()
 // is the actual guarantee -- a plain Promise.race the calling code can't
@@ -46,8 +57,14 @@ const TURN_MAX_TOKENS = 4000;
 // generation time tracks output length, and the model is now allowed to
 // write up to 2x as much of it, so the old ceiling no longer has real
 // margin above the new worst case. Raised well past a naive 2x of 24s.
+//
+// Raised a third time, 60s -> 100s, alongside TURN_MAX_TOKENS's 4000 ->
+// 8000 bump: the real 4000-token generation that hit the new max_tokens
+// bug (see that comment) took 46.6s end to end without ever hitting this
+// timeout -- doubling the token ceiling again needs proportional room
+// above that, not just above the old 60s number.
 const RESEARCH_TIMEOUT_MS = 40_000;
-const TURN_TIMEOUT_MS = 60_000;
+const TURN_TIMEOUT_MS = 100_000;
 
 export const anthropicAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {

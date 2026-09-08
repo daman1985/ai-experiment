@@ -13,15 +13,17 @@ import { logDiagnostic } from "@/lib/diagnostics";
 // app's actual prompts (not placeholder content) that a real research
 // call can legitimately take ~35s -- 60s was never actually enough for a
 // single real turn, let alone more than one. The turn call itself now has
-// up to 60s of its own (raised from ~24s worst-observed once
-// TURN_MAX_TOKENS doubled to stop mid-JSON truncation -- see
-// providers/anthropic.ts), not counting a possible consensus-extraction
-// chain immediately afterward (another ~50s worst case). Still comfortably
-// above one full research+turn (~100s) with margin to spare, so this
-// doesn't need to move with that bump -- see
+// up to 100s of its own (raised twice: ~24s -> 60s -> 100s, as
+// TURN_MAX_TOKENS doubled twice to stop mid-JSON truncation on
+// increasingly substantial real turns -- see providers/anthropic.ts), not
+// counting a possible consensus-extraction chain immediately afterward
+// (another ~50s worst case). Raised from 150s to 250s this time: the
+// previous 60s -> 100s-ish bump still fit inside 150s with margin, but
+// MIN_TURN_BUDGET_MS (160s) now exceeds what 150s leaves after
+// DEADLINE_MARGIN_MS, which would defer every run forever -- see
 // MIN_TURN_BUDGET_MS/MIN_EXTRACTION_BUDGET_MS in engine.ts, which this
 // deadline math is kept in sync with.
-export const maxDuration = 150;
+export const maxDuration = 250;
 export const dynamic = "force-dynamic";
 
 // Confirmed directly against a real production tick: two active runs

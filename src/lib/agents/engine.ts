@@ -39,14 +39,14 @@ function toEncryptedPayload(config: ProviderConfig) {
 }
 
 // A single advanceRunLocked call can now legitimately run a turn
-// (research + turn, up to ~100s, see MIN_TURN_BUDGET_MS below) and then,
+// (research + turn, up to ~140s, see MIN_TURN_BUDGET_MS below) and then,
 // if that turn happens to complete a consensus, immediately attempt the
 // extraction chain too (up to ~50s, see MIN_EXTRACTION_BUDGET_MS) --
-// worst case, one call's real duration approaches ~150s. This has to
+// worst case, one call's real duration approaches ~190s. This has to
 // stay comfortably above that, or a call that's still legitimately
 // running gets treated as an abandoned/crashed lock and a second caller
 // (the cron tick and "watch live" can race) starts a duplicate LLM call.
-const STALE_LOCK_MS = 200_000;
+const STALE_LOCK_MS = 230_000;
 
 // Worst case for the LLM turn call path (research timeout + turn timeout,
 // see providers/anthropic.ts et al) plus margin. Confirmed directly
@@ -57,13 +57,13 @@ const STALE_LOCK_MS = 200_000;
 // cron tick) needs this to decide whether there's enough of the deadline
 // left to even start a turn.
 //
-// Raised a second time (65s -> 115s once RESEARCH_TIMEOUT_MS/
-// TURN_TIMEOUT_MS above are added in) alongside TURN_TIMEOUT_MS's own
-// 35s -> 60s bump in the provider adapters -- see anthropic.ts's comment
-// on that change. Must stay above RESEARCH_TIMEOUT_MS + TURN_TIMEOUT_MS
-// (100s) with real margin, since nothing gates the turn call itself once
-// started; this is only checked before starting one.
-export const MIN_TURN_BUDGET_MS = 115_000;
+// Raised a second and third time (65s -> 115s -> 160s) in lockstep with
+// TURN_TIMEOUT_MS's own bumps in the provider adapters (35s -> 60s ->
+// 100s, see anthropic.ts's comments on each) -- must stay above
+// RESEARCH_TIMEOUT_MS + TURN_TIMEOUT_MS (140s) with real margin, since
+// nothing gates the turn call itself once started; this is only checked
+// before starting one.
+export const MIN_TURN_BUDGET_MS = 160_000;
 // Worst case for two sequential extraction calls (outcome + root-cause,
 // or vote tally + root-cause, see decisionExtraction.ts) plus margin.
 // Checked against the *shared* deadline, not a fresh budget, before
@@ -91,13 +91,14 @@ export const MIN_EXTRACTION_BUDGET_MS = 55_000;
 // separate invocation (e.g. the "watch live" admin action), which don't
 // share a deadline with anything else -- must exceed MIN_TURN_BUDGET_MS
 // with margin, or this default would defeat itself by leaving no room to
-// actually attempt a turn. Raised from 90s to 170s alongside
-// MIN_TURN_BUDGET_MS's own bump to 115s, so this default still clears it
-// with room for the extraction chain afterward -- see the route calling
-// this with its own maxDuration for the matching platform-level timeout.
+// actually attempt a turn. Raised twice more (90s -> 170s -> 215s)
+// alongside MIN_TURN_BUDGET_MS's own bumps, so this default still clears
+// it with room for the extraction chain afterward -- see the route
+// calling this with its own maxDuration for the matching platform-level
+// timeout.
 export async function advanceRun(
   runId: string,
-  deadlineAt: number = Date.now() + 170_000,
+  deadlineAt: number = Date.now() + 215_000,
 ): Promise<AdvanceResult> {
   const claimed = await prisma.run.updateMany({
     where: {

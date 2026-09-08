@@ -79,12 +79,12 @@ const TURN_OUTPUT_GEMINI_SCHEMA: Schema = {
 // in sync with anthropic.ts's timeouts and engine.ts's
 // MIN_TURN_BUDGET_MS.
 //
-// TURN_TIMEOUT_MS raised a second time to 60s in lockstep with
-// anthropic.ts -- see that file's comment: real Watch Live turns kept
-// hitting the 35s ceiling once TURN_MAX_TOKENS there doubled, since
-// generation time tracks output length, not input size.
+// TURN_TIMEOUT_MS raised a second and third time (60s, then 100s) in
+// lockstep with anthropic.ts -- see that file's comments: real turns kept
+// hitting the ceiling as TURN_MAX_TOKENS there doubled twice (2000 -> 4000
+// -> 8000), since generation time tracks output length, not input size.
 const RESEARCH_TIMEOUT_MS = 40_000;
-const TURN_TIMEOUT_MS = 60_000;
+const TURN_TIMEOUT_MS = 100_000;
 
 export const geminiAdapter: ProviderAdapter = {
   async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
